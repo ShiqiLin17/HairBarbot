@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HairBarbot</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Ccircle cx=%2216%22 cy=%2216%22 r=%2214%22 fill=%22%23d63a2f%22/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/common.css">
+<style>
+  body { display: grid; grid-template-rows: auto 1fr; min-height: 100%; padding-bottom: 92px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px max(16px, env(safe-area-inset-left)); flex-wrap: wrap; }
+  .brand { font-weight: 800; font-size: 22px; letter-spacing: .01em; }
+  .brand b { color: var(--accent); }
+  .hdr-right { display: flex; gap: 8px; flex-wrap: wrap; }
+  main { display: grid; grid-template-columns: 1fr; gap: 16px; padding: 0 max(16px, env(safe-area-inset-left)) 16px; min-height: 0; }
+  @media (min-width: 900px) { main { grid-template-columns: minmax(0, 1.35fr) minmax(360px, 1fr); } }
+  .stage { position: relative; background: var(--stage); border: 1px solid var(--line); border-radius: 22px; overflow: hidden; min-height: 52vh; }
+  @media (min-width: 900px) { .stage { min-height: 0; height: calc(100vh - 178px); position: sticky; top: 16px; align-self: start; } }
+  #view { position: absolute; inset: 0; }
+  #view canvas { width: 100% !important; height: 100% !important; display: block; touch-action: none; }
+  .stage-hint { position: absolute; top: 14px; left: 16px; font-size: 13px; color: var(--muted); pointer-events: none; }
+  .legend { position: absolute; left: 16px; bottom: 14px; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); pointer-events: none; }
+  .legend .bar { width: 130px; height: 10px; border-radius: 5px; }
+  .legend .uncut { width: 12px; height: 12px; border-radius: 3px; background: #3a2c25; margin-left: 10px; }
+  .side { display: grid; gap: 14px; align-content: start; min-width: 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 18px; display: grid; gap: 14px; min-width: 0; }
+  h2 { margin: 0; font-size: 20px; text-wrap: balance; }
+  .sub { margin: 0; color: var(--muted); font-size: 14px; }
+  .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .steps div { font-size: 12px; font-weight: 600; color: var(--muted); padding-top: 8px; border-top: 3px solid var(--line); text-transform: uppercase; letter-spacing: .06em; }
+  .steps div.done { color: var(--ink); border-color: var(--ink); }
+  .steps div.cur { color: var(--accent); border-color: var(--accent); }
+  .styles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .style { text-align: left; background: var(--panel-2); border: 2px solid var(--line); border-radius: 12px; padding: 12px; color: var(--ink); display: grid; gap: 4px; }
+  .style b { font-size: 16px; }
+  .style small { color: var(--muted); font-size: 13px; line-height: 1.35; }
+  .style.sel { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--panel)); }
+  .sliders { display: grid; gap: 10px; }
+  .srow { display: grid; grid-template-columns: 72px 1fr 58px; align-items: center; gap: 10px; }
+  .srow label { font-weight: 600; font-size: 14px; text-transform: capitalize; }
+  .srow output { text-align: right; font-weight: 700; font-size: 14px; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .fade { display: flex; align-items: center; gap: 8px; font-size: 14px; flex-wrap: wrap; }
+  .fade input[type=number] { width: 58px; font: inherit; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-2); color: var(--ink); }
+  .btn { border: 0; border-radius: 12px; padding: 14px 18px; font-weight: 800; font-size: 17px; background: var(--accent); color: var(--accent-ink); }
+  .btn.ghost { background: var(--panel-2); color: var(--ink); border: 1px solid var(--line); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .waiting { font-size: 14px; color: var(--muted); }
+  /* cutting view */
+  .ringwrap { display: grid; grid-template-columns: 150px 1fr; gap: 18px; align-items: center; }
+  @media (max-width: 420px) { .ringwrap { grid-template-columns: 120px 1fr; } }
+  .ring { position: relative; width: 100%; aspect-ratio: 1; max-width: 100%; }
+  .ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .ring .pct { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; }
+  .ring .pct b { font-size: 34px; line-height: 1; }
+  .ring .pct small { display: block; font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .big { font-size: 30px; font-weight: 800; line-height: 1.1; }
+  .now { font-size: 18px; font-weight: 700; }
+  .now span { color: var(--accent); }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .feed { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 14px; }
+  .feed li { display: grid; grid-template-columns: 54px 1fr; gap: 8px; }
+  .feed time { color: var(--muted); font-family: var(--mono); font-size: 12px; padding-top: 2px; }
+  .feed li.error { color: var(--stop); font-weight: 600; }
+  .stopcard { border-color: var(--stop); background: color-mix(in srgb, var(--stop) 8%, var(--panel)); }
+  .stopcard h2 { color: var(--stop); }
+  .summary { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; text-align: center; }
+  .summary div { background: var(--panel-2); border-radius: 10px; padding: 8px 4px; font-size: 12px; color: var(--muted); text-transform: capitalize; }
+  .summary b { display: block; color: var(--ink); font-size: 18px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Hair<b>Barbot</b></div>
+  <div class="hdr-right">
+    <span class="chip" id="steadyChip"><i></i>Head steady</span>
+    <span class="chip" id="clipChip"><i></i>Clipper off</span>
+    <span class="chip" id="stateChip"><i></i>Connecting</span>
+  </div>
+</header>
+
+<main>
+  <section class="stage" aria-label="Live 3D view of your head">
+    <div id="view"></div>
+    <div class="stage-hint" id="hint">Drag to turn the head</div>
+    <div class="legend"><span>short</span><div class="bar" id="legendBar"></div><span>long</span><span class="uncut"></span><span>not cut yet</span></div>
+  </section>
+
+  <section class="side">
+    <div class="card">
+      <div class="steps" id="steps"><div>Choose</div><div>Fit</div><div>Cut</div><div>Done</div></div>
+    </div>
+
+    <!-- choose a haircut -->
+    <div class="card" id="pickPanel">
+      <div><h2>Choose your haircut</h2><p class="sub">Pick a style, then fine-tune each area. The 3D head shows how it will look.</p></div>
+      <div class="styles" id="styles"></div>
+      <div class="sliders" id="sliders"></div>
+      <label class="fade" for="fadeOn"><input type="checkbox" id="fadeOn"> Fade the sides and back down to <input type="number" id="fadeTo" min="3" max="20" value="4"> mm</label>
+      <button class="btn" id="startBtn" disabled>Start haircut</button>
+      <p class="waiting" id="waitNote"></p>
+    </div>
+
+    <!-- cutting -->
+    <div class="card" id="cutPanel" hidden>
+      <div class="ringwrap">
+        <div class="ring">
+          <svg viewBox="0 0 120 120" aria-hidden="true">
+            <circle cx="60" cy="60" r="52" fill="none" stroke="var(--line)" stroke-width="10"/>
+            <circle id="ringArc" cx="60" cy="60" r="52" fill="none" stroke="var(--accent)" stroke-width="10" stroke-linecap="round" stroke-dasharray="326.7" stroke-dashoffset="326.7"/>
+          </svg>
+          <div class="pct"><div><b class="num" id="pct">0%</b><small id="strokes">0 / 23</small></div></div>
+        </div>
+        <div style="display:grid;gap:6px;min-width:0">
+          <div class="big num" id="eta">--</div>
+          <div class="sub num" id="elapsed"></div>
+        </div>
+      </div>
+      <div class="now" id="now">Getting started</div>
+      <p class="sub" id="cutMsg"></p>
+      <div class="chips">
+        <span class="chip" id="vacChip"><i></i>Vacuum</span>
+        <span class="chip" id="guardChip"><i></i>Guard</span>
+      </div>
+      <button class="btn ghost" id="pauseBtn">Pause</button>
+    </div>
+
+    <!-- done -->
+    <div class="card" id="donePanel" hidden>
+      <div><h2>All done!</h2><p class="sub" id="doneSub"></p></div>
+      <div class="summary" id="summary"></div>
+      <button class="btn ghost" id="newBtn">Choose another haircut</button>
+    </div>
+
+    <!-- stopped -->
+    <div class="card stopcard" id="stopPanel" hidden>
+      <div><h2>Stopped</h2><p class="sub" id="stopWhy"></p></div>
+      <p style="margin:0">The clipper is off and the arm has pulled away from your head. Your barber will check everything before continuing.</p>
+    </div>
+
+    <div class="card">
+      <h2 style="font-size:16px">What's happening</h2>
+      <ul class="feed" id="feed"></ul>
+    </div>
+  </section>
+</main>
+
+<div class="stopbar"><button class="stopbtn" id="stopBtn">STOP</button></div>
+<div class="offline" id="offline" hidden>Reconnecting to HairBarbot…</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script type="importmap">
+  { "imports": { "three": "/vendor/three/build/three.module.js", "three/addons/": "/vendor/three/examples/jsm/" } }
+</script>
+<script type="module" src="/client.js"></script>
+</body>
+</html>

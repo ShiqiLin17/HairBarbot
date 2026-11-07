@@ -14,6 +14,7 @@ Safety watchdog (runs 50x per second while cutting) stops the machine if:
   - "WRONG SPOT": the guard length doesn't match the haircut at the spot the cutter is on
   - the comb is pressing deeper into the head than the head model allows
 """
+import collections
 import threading
 import time
 import traceback
@@ -21,7 +22,7 @@ import traceback
 import config
 from kinematics import HeadModel, max_pitch, comb_tip_radius
 from planner import plan_haircut, estimate_minutes, PlanError
-from styles import guard_length, validate_lengths
+from styles import guard_length, validate_lengths, region_name, STYLES
 
 CALIB_POSES = [
     ("Crown (top)", 0.0, 0.0),
@@ -63,6 +64,12 @@ class Controller:
         self._abort = threading.Event()
         self._pause = threading.Event()
         self._worker = None
+        self.events = collections.deque(maxlen=60)
+        self.style_key = None
+        self.started_at = None
+        self.finished_at = None
+        self.stroke_times = []
+        self.plan_version = 0
         self.tracker.start()
         threading.Thread(target=self._watchdog, daemon=True).start()
 
@@ -98,6 +105,9 @@ class Controller:
         if self.state not in states:
             raise ControllerError(f"Not allowed while {self.state}.")
 
+    def _log(self, text, kind="info"):
+        self.events.append({"t": time.time(), "text": text, "kind": kind})
+
     # ------------------------------------------------------------ homing
     def home(self):
         self._require("NOT_HOMED", "IDLE", "READY", "DONE")
@@ -110,6 +120,7 @@ class Controller:
                 return
             self.state = "READY" if self.calibrated else "IDLE"
             self.message = "Homed. Seat the client and calibrate." if not self.calibrated else "Ready."
+            self._log("Machine homed")
         self._bg(run)
 
     # ------------------------------------------------------------ calibration
@@ -170,6 +181,7 @@ class Controller:
             self._move(st["yaw"], st["pitch"], 0.0, st["guard"], config.FEED_TRAVEL)
             self.calibrated = True
             self.state = "READY"
+            self._log(f"Head calibrated ({2*self.head.a:.0f} x {2*self.head.b:.0f} mm)", "ok")
             self.message = (f"Calibrated. Head size {2*self.head.a:.0f} x {2*self.head.b:.0f} mm. "
                             "Choose a haircut and press Start.")
         self._bg(run)
@@ -182,6 +194,7 @@ class Controller:
         self.calibrated = True
         self.state = "READY"
         self.message = "Using default head model (testing only)."
+        self._log("Default head model loaded (testing)")
 
     # ------------------------------------------------------------ preview / planning
     def make_plan(self, lengths, fade_to):
@@ -194,7 +207,7 @@ class Controller:
         return lengths, fade_to, strokes
 
     # ------------------------------------------------------------ cutting
-    def start_cut(self, lengths, fade_to=None, resume=False):
+    def start_cut(self, lengths, fade_to=None, resume=False, style=None):
         self._require("READY", "DONE")
         if not self.tracker.snapshot()["ok"]:
             raise ControllerError("Camera check failed: " + self.tracker.snapshot()["reason"])
@@ -203,11 +216,18 @@ class Controller:
         else:
             self.lengths, self.fade_to, self.strokes = self.make_plan(lengths, fade_to)
             self.est_minutes = estimate_minutes(self.strokes)
+            self.style_key = style if style in STYLES else None
+            self.started_at = time.time()
+            self.finished_at = None
+            self.stroke_times = []
+            self.plan_version += 1
             start = 0
         self._abort.clear()
         self._pause.clear()
         self.state = "CUTTING"
         self.message = "Cutting. Keep still."
+        name = STYLES[self.style_key]["name"] if self.style_key else "Custom"
+        self._log(f"Resumed at stroke {start + 1}" if start else f"Haircut started: {name}", "ok")
         self._bg(self._run_cut, start)
 
     def _wait_if_paused(self, wp):
@@ -241,6 +261,7 @@ class Controller:
         self.link.vacuum(True)
         for k in range(start, len(self.strokes)):
             self.next_stroke = k
+            t_stroke = time.time()
             stroke = self.strokes[k]
             first = stroke[0]
             st = self.link.get_status()
@@ -256,21 +277,28 @@ class Controller:
             self._clip(False)
             last = stroke[-1]
             self._move(last.yaw, last.pitch, max(0.0, last.rad - config.APPROACH_GAP), last.guard, config.FEED_TRAVEL)
+            self.stroke_times.append(time.time() - t_stroke)
+            if (k + 1) % 4 == 0 or k + 1 == len(self.strokes):
+                self._log(f"{k + 1} of {len(self.strokes)} strokes done")
         self.next_stroke = len(self.strokes)
         st = self.link.get_status()
         self._move(st["yaw"], st["pitch"], 0.0, st["guard"], config.FEED_TRAVEL)
         self._move(0.0, 0.0, 0.0, config.GUARD_MAX, config.FEED_TRAVEL)
         self.link.vacuum(False)
         self.state, self.message = "DONE", "Haircut finished!"
+        self.finished_at = time.time()
+        self._log("Haircut finished", "ok")
 
     def pause(self):
         self._require("CUTTING")
         self._pause.set()
         self.message = "Pausing after this step..."
+        self._log("Pause requested")
 
     def resume(self):
         self._require("PAUSED")
         self._pause.clear()
+        self._log("Resumed")
 
     def stop(self, reason="Stopped by user"):
         self._abort.set()
@@ -281,6 +309,7 @@ class Controller:
             if self.state != "STOPPED":
                 self.state = "STOPPED"
                 self.message = reason
+                self._log(f"STOP: {reason}", "error")
 
     def reset(self):
         self._require("STOPPED")
@@ -364,4 +393,41 @@ class Controller:
             },
             "lengths": self.lengths,
             "fade_to": self.fade_to,
+            "style": self.style_key,
+            "live": self._live(st),
+            "events": list(self.events)[-25:],
+            "plan_version": self.plan_version,
+            "server_time": time.time(),
+        }
+
+    def _live(self, st):
+        """Friendly live numbers for the apps."""
+        live = {"region": None, "need_guard": None, "elapsed": None, "eta_s": None, "stroke": None,
+                "tip_r": None, "scalp_r": None}
+        if st.get("homed"):
+            live["region"] = region_name(st["yaw"], st["pitch"])
+            live["tip_r"] = round(comb_tip_radius(st["rad"], st["guard"]), 1)
+            live["scalp_r"] = round(self.head.radius(st["yaw"], st["pitch"]), 1)
+        if self.lengths and st.get("homed"):
+            live["need_guard"] = round(guard_length(st["yaw"], st["pitch"], self.lengths, self.fade_to), 1)
+        if self.started_at:
+            end = self.finished_at or time.time()
+            live["elapsed"] = round(end - self.started_at, 1)
+            left = max(0, len(self.strokes) - self.next_stroke)
+            if self.finished_at:
+                live["eta_s"] = 0
+            elif self.stroke_times:
+                avg = sum(self.stroke_times[-6:]) / len(self.stroke_times[-6:])
+                live["eta_s"] = round(left * avg)
+            else:
+                live["eta_s"] = round(self.est_minutes * 60 * left / max(1, len(self.strokes)))
+        if self.strokes and self.state in ("CUTTING", "PAUSED"):
+            live["stroke"] = min(self.next_stroke + 1, len(self.strokes))
+        return live
+
+    def plan_dict(self):
+        return {
+            "version": self.plan_version,
+            "head": {"a": self.head.a, "b": self.head.b, "c": self.head.c},
+            "strokes": [[[w.yaw, w.pitch, w.guard] for w in s] for s in self.strokes],
         }

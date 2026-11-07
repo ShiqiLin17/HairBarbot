@@ -79,8 +79,9 @@ def test_full_haircut_and_safety_stops():
     s = wait_state(c, {"DONE", "STOPPED"}, 300)
     assert s["state"] == "DONE", s["message"]
     assert s["progress"]["done"] == s["progress"]["total"] == 23
+    time.sleep(0.1)   # let the simulator publish its last status
     m = ctl.link.get_status()
-    assert not m["clipper"] and not m["vacuum"] and m["rad"] == 0.0
+    assert not m["clipper"] and not m["vacuum"] and m["rad"] == 0.0, m
 
 
 def test_wrong_spot_detection():

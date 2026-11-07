@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HairBarbot Operator</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Ccircle cx=%2216%22 cy=%2216%22 r=%2214%22 fill=%22%23d63a2f%22/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/common.css">
+<style>
+  body { padding-bottom: 92px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+           padding: 14px max(16px, env(safe-area-inset-left)); border-bottom: 1px solid var(--line); background: var(--panel); }
+  .brand { font-weight: 800; font-size: 20px; }
+  .brand b { color: var(--accent); }
+  .brand span { font-weight: 500; color: var(--muted); font-size: 15px; margin-left: 6px; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .msgbar { padding: 10px max(16px, env(safe-area-inset-left)); font-size: 15px; border-bottom: 1px solid var(--line); }
+  .msgbar.bad { background: color-mix(in srgb, var(--stop) 12%, var(--bg)); color: var(--stop); font-weight: 700; }
+  main { display: grid; gap: 14px; padding: 14px max(16px, env(safe-area-inset-left)); grid-template-columns: 1fr; }
+  @media (min-width: 1000px) { main { grid-template-columns: 1fr 1.1fr 1fr; align-items: start; } }
+  .col { display: grid; gap: 14px; min-width: 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 16px; display: grid; gap: 12px; min-width: 0; }
+  .card h2 { margin: 0; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 700; display: flex; justify-content: space-between; gap: 8px; }
+  .view3d { position: relative; height: 340px; background: var(--stage); border-radius: 10px; overflow: hidden; }
+  .view3d canvas { width: 100% !important; height: 100% !important; display: block; touch-action: none; }
+  .gauge { display: grid; gap: 4px; }
+  .gauge .top { display: flex; justify-content: space-between; font-size: 14px; }
+  .gauge .top b { font-family: var(--mono); font-weight: 600; }
+  .track { position: relative; height: 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; }
+  .track .fill { position: absolute; top: -1px; bottom: -1px; left: 0; background: var(--data); border-radius: 6px; opacity: .8; }
+  .track .mark { position: absolute; top: -5px; bottom: -5px; width: 3px; background: var(--accent); border-radius: 2px; }
+  .track .band { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  .gauge .ends { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  canvas.chart { width: 100%; height: 150px; display: block; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 5px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 14px; }
+  .kv span:nth-child(odd) { color: var(--muted); }
+  .kv span:nth-child(even) { font-family: var(--mono); text-align: right; }
+  .good { color: var(--ok); } .bad { color: var(--stop); font-weight: 700; }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  .b { border: 1px solid var(--line); background: var(--panel-2); color: var(--ink); border-radius: 10px; padding: 9px 13px; font-weight: 600; font-size: 14px; }
+  .b.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .b:disabled { opacity: .4; cursor: not-allowed; }
+  .pts { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  .pts li { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 14px; }
+  .pts li.cur { color: var(--accent); font-weight: 700; }
+  .cam { width: 100%; aspect-ratio: 4 / 3; background: #000; border-radius: 10px; object-fit: cover; display: block; }
+  .camnote { font-size: 13px; color: var(--muted); }
+  .log { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13px; max-height: 360px; overflow: auto; }
+  .log li { display: grid; grid-template-columns: 92px 1fr; gap: 8px; }
+  .log time { font-family: var(--mono); color: var(--muted); font-size: 12px; }
+  .log li.error { color: var(--stop); font-weight: 600; }
+  .log li.ok { color: var(--ok); }
+  .small { font-size: 13px; color: var(--muted); margin: 0; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Hair<b>Barbot</b><span>Operator</span></div>
+  <div class="chips">
+    <span class="chip" id="linkChip"><i></i>Link</span>
+    <span class="chip" id="fwChip"><i></i>Firmware</span>
+    <span class="chip" id="stateChip"><i></i>State</span>
+  </div>
+</header>
+<div class="msgbar" id="msg">Connecting…</div>
+
+<main>
+  <div class="col">
+    <div class="card">
+      <h2>Live view <span id="progTxt" class="num"></span></h2>
+      <div class="view3d" id="view"></div>
+    </div>
+    <div class="card">
+      <h2>Machine</h2>
+      <div class="btns">
+        <button class="b primary" id="homeBtn">Home</button>
+        <button class="b" id="pauseBtn">Pause</button>
+        <button class="b" id="resetBtn">Reset after stop</button>
+      </div>
+      <div class="btns" id="simTools" hidden>
+        <button class="b" id="defBtn">Skip calibration (sim)</button>
+        <button class="b" id="bumpBtn">Simulate head movement</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Head calibration <span id="headSize" class="num"></span></h2>
+      <p class="small">Client seated, chin on the rest. Go to each point, jog until the comb just touches the hair, then Record. 4+ points.</p>
+      <div class="btns"><button class="b" id="calStart">Start calibration</button></div>
+      <ul class="pts" id="pts"></ul>
+      <div class="btns">
+        <button class="b" data-jog="-5">− 5</button><button class="b" data-jog="-1">− 1</button>
+        <button class="b" data-jog="1">+ 1</button><button class="b" data-jog="5">+ 5 mm</button>
+      </div>
+      <div class="btns"><button class="b" id="calRec">Record touch</button><button class="b primary" id="calFin">Finish</button></div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="card">
+      <h2>Axes</h2>
+      <div id="gauges" style="display:grid;gap:14px"></div>
+    </div>
+    <div class="card">
+      <h2>Wrong-spot check · guard vs plan <span class="num" id="guardErr"></span></h2>
+      <canvas class="chart" id="guardChart"></canvas>
+      <div class="legend"><span><i style="background:var(--data)"></i>actual guard</span><span><i style="background:var(--accent)"></i>needed here</span><span><i style="background:color-mix(in srgb, var(--accent) 25%, transparent);height:8px"></i>±1.5 mm allowed</span></div>
+    </div>
+    <div class="card">
+      <h2>Depth check · comb vs scalp <span class="num" id="depthTxt"></span></h2>
+      <canvas class="chart" id="depthChart"></canvas>
+      <div class="legend"><span><i style="background:var(--data)"></i>comb tip − scalp (mm)</span><span><i style="background:var(--stop)"></i>stop line −6 mm</span></div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="card">
+      <h2>Sensors</h2>
+      <div class="kv" id="sensors"></div>
+    </div>
+    <div class="card">
+      <h2>Camera</h2>
+      <img class="cam" id="cam" alt="Camera view of the client's face" hidden>
+      <p class="camnote" id="camNote">No camera in simulation.</p>
+    </div>
+    <div class="card">
+      <h2>Event log</h2>
+      <ul class="log" id="log"></ul>
+    </div>
+  </div>
+</main>
+
+<div class="stopbar"><button class="stopbtn" id="stopBtn">STOP</button></div>
+<div class="offline" id="offline" hidden>Lost connection to the controller. Retrying…</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script type="importmap">
+  { "imports": { "three": "/vendor/three/build/three.module.js", "three/addons/": "/vendor/three/examples/jsm/" } }
+</script>
+<script type="module" src="/operator.js"></script>
+</body>
+</html>

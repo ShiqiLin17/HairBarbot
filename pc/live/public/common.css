@@ -1,0 +1,51 @@
+/* HairBarbot live app: shared tokens. Graphite + barber-pole red, steel blue for data. */
+:root {
+  --bg: #eef1f3;
+  --panel: #ffffff;
+  --panel-2: #f6f8f9;
+  --ink: #161c21;
+  --muted: #5d6973;
+  --line: #d8dee3;
+  --accent: #d63a2f;
+  --accent-ink: #ffffff;
+  --data: #2b6f9f;
+  --ok: #24804a;
+  --warn: #b26b00;
+  --stop: #d0261b;
+  --stage: radial-gradient(ellipse at 50% 40%, #ffffff 0%, #e3e8ec 70%);
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --r: 14px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1114; --panel: #151b20; --panel-2: #1b2329; --ink: #e7edf1; --muted: #8e9ba6; --line: #26313a;
+    --accent: #ff5a4c; --accent-ink: #1a0503; --data: #6db3e6; --ok: #5fd08a; --warn: #f0a63a; --stop: #ff3b30;
+    --stage: radial-gradient(ellipse at 50% 40%, #1d262d 0%, #0d1114 72%);
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 16px; line-height: 1.45; }
+button { font: inherit; cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 3px solid var(--data); outline-offset: 2px; }
+.num { font-variant-numeric: tabular-nums; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; font-size: 13px; font-weight: 600;
+        background: var(--panel-2); border: 1px solid var(--line); white-space: nowrap; }
+.chip i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+.chip.on i { background: var(--ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 25%, transparent); }
+.chip.hot { color: var(--stop); border-color: color-mix(in srgb, var(--stop) 50%, var(--line)); }
+.chip.hot i { background: var(--stop); animation: blink 0.8s infinite alternate; }
+.chip.warn i { background: var(--warn); }
+@keyframes blink { to { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .chip.hot i { animation: none; } }
+.stopbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; padding: 10px max(16px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+           background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(8px); border-top: 1px solid var(--line); }
+.stopbtn { display: block; width: 100%; padding: 16px; border: 0; border-radius: 16px; background: var(--stop); color: #fff;
+           font-size: 22px; font-weight: 900; letter-spacing: .14em; }
+.stopbtn:active { transform: scale(.995); }
+.toast { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px;
+         border-radius: 10px; font-size: 14px; z-index: 30; max-width: 90vw; }
+.offline { position: fixed; top: 0; left: 0; right: 0; z-index: 40; background: var(--warn); color: #111; text-align: center; padding: 6px; font-size: 14px; font-weight: 600; }

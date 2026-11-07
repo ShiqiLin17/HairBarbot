@@ -7,6 +7,7 @@
 Then open http://localhost:5000 (or http://<laptop-ip>:5000 on a phone/tablet on the same Wi-Fi).
 """
 import argparse
+import logging
 import os
 
 from flask import Flask, jsonify, request, send_from_directory, Response
@@ -62,6 +63,10 @@ def create_app(sim=True, port=None, speedup=1.0):
         fade = None if fade in (None, "", False) else float(fade)
         return jsonify(preview_grid(lengths, fade))
 
+    @app.get("/api/plan")
+    def plan():
+        return jsonify(ctl.plan_dict())
+
     @app.post("/api/home")
     def home():
         ctl.home()
@@ -100,7 +105,7 @@ def create_app(sim=True, port=None, speedup=1.0):
     @app.post("/api/cut")
     def cut():
         body = request.get_json(force=True)
-        ctl.start_cut(body.get("lengths"), body.get("fade_to"), resume=bool(body.get("resume")))
+        ctl.start_cut(body.get("lengths"), body.get("fade_to"), resume=bool(body.get("resume")), style=body.get("style"))
         return ok()
 
     @app.post("/api/pause")
@@ -147,6 +152,7 @@ if __name__ == "__main__":
     ap.add_argument("--speedup", type=float, default=1.0, help="sim only: run the fake machine faster")
     ap.add_argument("--http", type=int, default=5000)
     a = ap.parse_args()
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)   # no log line for every 10 Hz status poll
     app = create_app(sim=a.sim, port=a.port, speedup=a.speedup)
     print(f"HairBarbot app: http://localhost:{a.http}   ({'SIMULATION' if a.sim else 'REAL MACHINE'})")
     app.run(host="0.0.0.0", port=a.http, threaded=True)

@@ -86,3 +86,17 @@ def preview_grid(lengths, fade_to=None, yaw_step=10, pitch_step=5):
             row.append(round(guard_length(y, p, lengths, fade_to), 1) if p <= max_pitch(y) else None)
         rows.append(row)
     return {"yaw_step": yaw_step, "pitch_step": pitch_step, "rows": rows}
+
+
+def region_name(yaw: float, pitch: float) -> str:
+    """Friendly name of the area at (yaw, pitch), for the live app."""
+    ay = abs(yaw)
+    if pitch < 35:
+        return "top"
+    if ay > 115 and pitch > 85:
+        return "nape"
+    if ay <= 50:
+        return "front"
+    if ay >= 135:
+        return "back"
+    return "left side" if yaw > 0 else "right side"

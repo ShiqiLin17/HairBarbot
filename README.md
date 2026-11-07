@@ -26,6 +26,7 @@ docs/budget.xlsx          parts list + budget
   pc/serial_link.py         serial protocol to the Arduino + full simulator
   pc/web/index.html         the client app (style picker, preview, START/PAUSE, big STOP)
   pc/tests/test_sim.py      end-to-end test in simulation
+  pc/live/                  Node.js + Socket.io live app: 3D client view + operator dashboard
 ```
 
 ## 1. Try it today (no hardware)
@@ -40,6 +41,24 @@ Watch the dot move on the head map; try **Simulate head movement** and the **STO
 Run the tests: `python tests/test_sim.py`.
 
 The app also works on a phone: on the same Wi-Fi open `http://<laptop-ip>:5000`.
+
+## 1b. Live app (Node.js) — what the client watches during the cut
+
+```bash
+cd pc/live
+npm install
+npm run demo          # starts the Python simulator for you, then the live app
+```
+- **http://localhost:3000** — client app for the tablet in front of the client: choose a style and see it on a
+  3D head, then watch the cut live (hair "gets cut" on the 3D head pass by pass, progress ring, time left,
+  which area is being trimmed, clipper/vacuum/head-steady indicators, big STOP).
+- **http://localhost:3000/operator** — team dashboard: live 3D view, axis gauges, the wrong-spot check
+  (guard vs plan, live chart), depth check, sensors, camera feed, event log, homing and calibration controls.
+- Open either page on a phone/tablet on the same Wi-Fi using the address the server prints.
+
+On the real machine: start the controller first (`python app.py --port COM3`), then `npm start` in `pc/live`.
+The Node server only relays data and button presses (Socket.io, 10 updates/s); every safety check stays in
+the Python controller and the firmware.
 
 ## 2. Electronics
 

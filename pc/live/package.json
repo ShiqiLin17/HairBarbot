@@ -1,0 +1,19 @@
+{
+  "name": "hairbarbot-live",
+  "version": "1.0.0",
+  "private": true,
+  "description": "HairBarbot live app: real-time client view and operator dashboard (Socket.io)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "demo": "node server.js --sim"
+  },
+  "dependencies": {
+    "express": "4.21.2",
+    "socket.io": "4.8.1",
+    "three": "0.170.0"
+  },
+  "devDependencies": {
+    "socket.io-client": "4.8.1"
+  }
+}
