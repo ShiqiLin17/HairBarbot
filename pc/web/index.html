@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HairBarbot</title>
+<style>
+  :root {
+    --bg: #f4f2ee; --card: #ffffff; --ink: #1d2327; --muted: #67707a; --line: #e2ded7;
+    --accent: #0f6b66; --accent-ink: #ffffff; --warn: #b26a00; --stop: #c62828; --ok: #2e7d32;
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #141719; --card: #1d2125; --ink: #eceff1; --muted: #9aa3ab; --line: #2c3237;
+            --accent: #3fb5ac; --accent-ink: #0b1514; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--ink); padding-bottom: 110px; }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px;
+           max-width: 1100px; margin: 0 auto; }
+  .brand { font-weight: 800; letter-spacing: .04em; font-size: 22px; }
+  .brand span { color: var(--accent); }
+  .pill { padding: 6px 12px; border-radius: 999px; font-size: 13px; font-weight: 600;
+          background: var(--line); color: var(--ink); }
+  .pill.ok { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+  .pill.run { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); }
+  .pill.bad { background: color-mix(in srgb, var(--stop) 18%, transparent); color: var(--stop); }
+  main { max-width: 1100px; margin: 0 auto; padding: 0 16px; display: grid; gap: 16px;
+         grid-template-columns: 1fr; }
+  @media (min-width: 900px) { main { grid-template-columns: 1.1fr 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; }
+  h2 { margin: 0 0 4px; font-size: 17px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 14px; }
+  .styles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .style { text-align: left; border: 2px solid var(--line); background: transparent; color: var(--ink);
+           border-radius: 12px; padding: 12px; cursor: pointer; font: inherit; }
+  .style b { display: block; margin-bottom: 4px; }
+  .style small { color: var(--muted); }
+  .style.sel { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .sliders { margin-top: 16px; display: grid; gap: 12px; }
+  .row { display: grid; grid-template-columns: 70px 1fr 64px; align-items: center; gap: 10px; }
+  .row label { font-weight: 600; font-size: 14px; text-transform: capitalize; }
+  .row output { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .check { display: flex; gap: 8px; align-items: center; font-size: 14px; margin-top: 4px; }
+  canvas { width: 100%; max-width: 420px; display: block; margin: 0 auto; aspect-ratio: 1; }
+  .legend { display: flex; align-items: center; gap: 8px; justify-content: center; font-size: 12px; color: var(--muted); }
+  .legend .bar { width: 160px; height: 10px; border-radius: 5px; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+  button.btn { font: inherit; font-weight: 700; border: 0; border-radius: 12px; padding: 13px 18px; cursor: pointer;
+               background: var(--accent); color: var(--accent-ink); }
+  button.btn.secondary { background: var(--line); color: var(--ink); }
+  button.btn:disabled { opacity: .4; cursor: not-allowed; }
+  .progress { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; margin: 10px 0 6px; }
+  .progress div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .msg { font-size: 15px; min-height: 22px; }
+  .msg.bad { color: var(--stop); font-weight: 600; }
+  .error { color: var(--stop); font-size: 14px; min-height: 18px; margin-top: 8px; }
+  .stopbar { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+             background: color-mix(in srgb, var(--bg) 85%, transparent); backdrop-filter: blur(6px);
+             border-top: 1px solid var(--line); }
+  .stopbtn { display: block; width: 100%; max-width: 1100px; margin: 0 auto; font: inherit; font-size: 22px; font-weight: 900;
+             letter-spacing: .12em; padding: 18px; border: 0; border-radius: 16px; background: var(--stop); color: #fff; cursor: pointer; }
+  details.op { grid-column: 1 / -1; }
+  details.op summary { cursor: pointer; font-weight: 700; }
+  .opgrid { display: grid; gap: 16px; grid-template-columns: 1fr; margin-top: 14px; }
+  @media (min-width: 900px) { .opgrid { grid-template-columns: 1fr 1fr 1fr; } }
+  .mini { font-size: 13px; color: var(--muted); }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 14px; font-variant-numeric: tabular-nums; }
+  .pts { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 6px; }
+  .pts li { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 14px; }
+  .pts li.cur { font-weight: 700; color: var(--accent); }
+  .smallbtn { font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line);
+              background: transparent; color: var(--ink); cursor: pointer; }
+  .jog { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+  img.cam { width: 100%; border-radius: 10px; background: #000; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Hair<span>Barbot</span></div>
+  <div id="pill" class="pill">connecting…</div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>1. Choose your haircut</h2>
+    <p class="sub">Pick a style, then fine-tune the length for each part of your head.</p>
+    <div id="styles" class="styles"></div>
+    <div class="sliders" id="sliders"></div>
+    <label class="check"><input type="checkbox" id="fadeOn"> Fade sides & back down to
+      <input type="number" id="fadeTo" min="3" max="20" value="4" style="width:56px"> mm</label>
+  </section>
+
+  <section class="card">
+    <h2>2. Preview</h2>
+    <p class="sub">Your head seen from above, face at the top. Gray = not cut by the machine (face and ears).</p>
+    <canvas id="map" width="840" height="840"></canvas>
+    <div class="legend"><span id="lmin">3 mm</span><div class="bar" id="lbar"></div><span id="lmax">40 mm</span></div>
+
+    <h2 style="margin-top:18px">3. Cut</h2>
+    <div class="msg" id="msg"></div>
+    <div class="progress"><div id="bar"></div></div>
+    <div class="mini" id="prog"></div>
+    <div class="actions">
+      <button class="btn" id="startBtn">Start haircut</button>
+      <button class="btn secondary" id="contBtn">Continue</button>
+      <button class="btn secondary" id="pauseBtn">Pause</button>
+    </div>
+    <div class="error" id="err"></div>
+  </section>
+
+  <details class="card op" id="op">
+    <summary>Operator panel (setup, calibration, diagnostics)</summary>
+    <div class="opgrid">
+      <div>
+        <h2>Machine</h2>
+        <div class="actions" style="margin-top:8px">
+          <button class="btn secondary" id="homeBtn">Home</button>
+          <button class="btn secondary" id="resetBtn">Reset after stop</button>
+        </div>
+        <div class="kv" id="joints" style="margin-top:12px"></div>
+        <div id="simbox" style="display:none;margin-top:12px">
+          <p class="mini">Simulation mode</p>
+          <button class="smallbtn" id="simMove">Simulate head movement</button>
+          <button class="smallbtn" id="defCal">Skip calibration (default head)</button>
+        </div>
+      </div>
+      <div>
+        <h2>Head calibration</h2>
+        <p class="mini">Seat the client with chin on the rest. At each point, jog the comb in until it just touches the hair, then Record. 4+ points needed.</p>
+        <button class="smallbtn" id="calStart">Start calibration</button>
+        <ul class="pts" id="pts"></ul>
+        <div class="jog">
+          <button class="smallbtn" data-jog="-5">− 5 mm</button>
+          <button class="smallbtn" data-jog="-1">− 1</button>
+          <button class="smallbtn" data-jog="1">+ 1</button>
+          <button class="smallbtn" data-jog="5">+ 5 mm</button>
+        </div>
+        <button class="smallbtn" id="calRec">Record touch</button>
+        <button class="smallbtn" id="calFin">Finish</button>
+        <p class="mini" id="headsize"></p>
+      </div>
+      <div>
+        <h2>Camera</h2>
+        <img class="cam" id="cam" alt="camera view" style="display:none">
+        <p class="mini" id="trk"></p>
+      </div>
+    </div>
+  </details>
+</main>
+
+<div class="stopbar"><button class="stopbtn" id="stopBtn">STOP</button></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const REGIONS = ["top", "front", "sides", "back", "nape"];
+let styles = {}, gmin = 3, gmax = 40, current = null, grid = null, status = null, previewTimer = null;
+
+async function api(path, body) {
+  const opt = body === undefined ? { method: "POST" } :
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(path, opt);
+  const j = await r.json().catch(() => ({}));
+  $("#err").textContent = j.ok === false ? j.error : "";
+  if (j.status) render(j.status);
+  return j;
+}
+
+function lengths() {
+  const o = {};
+  REGIONS.forEach(r => o[r] = +$("#s_" + r).value);
+  return o;
+}
+function fadeTo() { return $("#fadeOn").checked ? +$("#fadeTo").value : null; }
+
+function buildUI() {
+  const box = $("#styles");
+  Object.entries(styles).forEach(([k, s]) => {
+    const b = document.createElement("button");
+    b.className = "style"; b.dataset.k = k;
+    b.innerHTML = `<b>${s.name}</b><small>${s.desc}</small>`;
+    b.onclick = () => pickStyle(k);
+    box.appendChild(b);
+  });
+  const sl = $("#sliders");
+  REGIONS.forEach(r => {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.innerHTML = `<label for="s_${r}">${r}</label>
+      <input type="range" id="s_${r}" min="${gmin}" max="${gmax}" step="1">
+      <output id="o_${r}"></output>`;
+    sl.appendChild(row);
+    row.querySelector("input").oninput = () => { current = null; markStyle(); schedulePreview(); };
+  });
+  $("#fadeOn").onchange = schedulePreview;
+  $("#fadeTo").oninput = schedulePreview;
+  pickStyle("classic");
+}
+function markStyle() { document.querySelectorAll(".style").forEach(b => b.classList.toggle("sel", b.dataset.k === current)); }
+function pickStyle(k) {
+  current = k; markStyle();
+  const s = styles[k];
+  REGIONS.forEach(r => $("#s_" + r).value = s.lengths[r]);
+  $("#fadeOn").checked = s.fade_to != null;
+  if (s.fade_to != null) $("#fadeTo").value = s.fade_to;
+  schedulePreview();
+}
+function schedulePreview() {
+  REGIONS.forEach(r => $("#o_" + r).textContent = $("#s_" + r).value + " mm");
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(async () => {
+    const r = await fetch("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lengths: lengths(), fade_to: fadeTo() }) });
+    if (r.ok) { grid = await r.json(); draw(); }
+  }, 120);
+}
+
+// color: short hair = light, long hair = dark accent
+function color(v) {
+  const t = (v - gmin) / (gmax - gmin);
+  const a = [222, 240, 236], b = [8, 78, 74];
+  const c = a.map((x, i) => Math.round(x + (b[i] - x) * t));
+  return `rgb(${c})`;
+}
+function draw() {
+  const cv = $("#map"), ctx = cv.getContext("2d"), W = cv.width, cx = W / 2, cy = W / 2, R = W * 0.44;
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  ctx.clearRect(0, 0, W, W);
+  if (!grid) return;
+  const ys = grid.yaw_step, ps = grid.pitch_step, rad = d => d * Math.PI / 180;
+  grid.rows.forEach((row, i) => {
+    const p = i * ps;
+    row.forEach((v, j) => {
+      const y = -180 + j * ys;
+      const r0 = Math.max(0, (p - ps / 2)) / 110 * R, r1 = (p + ps / 2) / 110 * R;
+      // screen angle: yaw 0 (face) up, +yaw (client's left) to the left
+      const a0 = rad(-90 - (y - ys / 2)), a1 = rad(-90 - (y + ys / 2));
+      ctx.beginPath();
+      ctx.arc(cx, cy, r1, a1, a0);
+      ctx.arc(cx, cy, r0, a0, a1, true);
+      ctx.closePath();
+      ctx.fillStyle = v == null ? (dark ? "#2a2f33" : "#e6e3de") : color(v);
+      ctx.fill();
+    });
+  });
+  // labels
+  ctx.fillStyle = dark ? "#cfd6db" : "#3a4248";
+  ctx.font = "600 26px system-ui"; ctx.textAlign = "center";
+  ctx.fillText("FACE", cx, cy - R - 10);
+  ctx.fillText("BACK", cx, cy + R + 32);
+  ctx.save(); ctx.translate(cx - R - 14, cy); ctx.rotate(-Math.PI / 2); ctx.fillText("LEFT EAR", 0, 0); ctx.restore();
+  ctx.save(); ctx.translate(cx + R + 14, cy); ctx.rotate(Math.PI / 2); ctx.fillText("RIGHT EAR", 0, 0); ctx.restore();
+  // cutter position
+  if (status && status.machine && status.machine.homed) {
+    const m = status.machine, r = Math.max(0, m.pitch) / 110 * R, a = rad(-90 - m.yaw);
+    const x = cx + r * Math.cos(a), y = cy + r * Math.sin(a);
+    ctx.beginPath(); ctx.arc(x, y, 14, 0, 2 * Math.PI);
+    ctx.fillStyle = m.clipper ? "#c62828" : "#ffb300"; ctx.fill();
+    ctx.lineWidth = 4; ctx.strokeStyle = "#fff"; ctx.stroke();
+  }
+}
+
+function render(s) {
+  status = s;
+  const pill = $("#pill");
+  pill.textContent = s.state.replace("_", " ") + (s.sim ? " · SIM" : "");
+  pill.className = "pill " + ({ CUTTING: "run", PAUSED: "run", HOMING: "run", READY: "ok", DONE: "ok", STOPPED: "bad" }[s.state] || "");
+  const msg = $("#msg");
+  msg.textContent = s.message; msg.className = "msg" + (s.state === "STOPPED" ? " bad" : "");
+  const p = s.progress, pct = p.total ? Math.round(100 * p.done / p.total) : 0;
+  $("#bar").style.width = pct + "%";
+  $("#prog").textContent = p.total ? `${p.done} / ${p.total} strokes · about ${s.est_minutes} min total` : "";
+  const canStart = (s.state === "READY" || s.state === "DONE") && !s.busy;
+  $("#startBtn").disabled = !canStart;
+  $("#contBtn").style.display = (s.state === "READY" && p.total && p.done > 0 && p.done < p.total) ? "" : "none";
+  $("#pauseBtn").disabled = !(s.state === "CUTTING" || s.state === "PAUSED");
+  $("#pauseBtn").textContent = s.state === "PAUSED" ? "Resume" : "Pause";
+  // operator
+  const m = s.machine;
+  $("#joints").innerHTML = `
+    <span>Firmware</span><b>${m.state_name}${s.fault ? " · " + s.fault : ""}</b>
+    <span>Yaw</span><span>${m.yaw.toFixed(1)}°</span>
+    <span>Pitch</span><span>${m.pitch.toFixed(1)}°</span>
+    <span>Radial</span><span>${m.rad.toFixed(1)} mm</span>
+    <span>Guard</span><span>${m.guard.toFixed(1)} mm</span>
+    <span>ToF</span><span>${m.tof1} / ${m.tof2} mm ${m.tof_ok ? "" : "(not ok)"}</span>
+    <span>Clipper</span><span>${m.clipper ? "ON" : "off"} · vacuum ${m.vacuum ? "ON" : "off"}</span>
+    <span>E-stop</span><span>${m.estop_ok ? "released" : "PRESSED"}</span>`;
+  $("#simbox").style.display = s.sim ? "" : "none";
+  const c = s.calibration;
+  $("#pts").innerHTML = c.poses.map((n, i) =>
+    `<li class="${c.current === i ? "cur" : ""}"><span>${c.recorded.includes(n) ? "✓ " : ""}${n}</span>
+     <button class="smallbtn" onclick="api('/api/calibrate/goto/${i}')">Go</button></li>`).join("");
+  $("#headsize").textContent = c.calibrated ? `Head model: ${2 * c.head.a} × ${2 * c.head.b} mm, top ${c.head.c} mm` : "Not calibrated";
+  const t = s.tracker;
+  $("#trk").textContent = t.ok ? "Head check: OK" : "Head check: " + t.reason;
+  draw();
+}
+
+async function poll() {
+  try {
+    const r = await fetch("/api/state");
+    render(await r.json());
+  } catch (e) { $("#pill").textContent = "disconnected"; $("#pill").className = "pill bad"; }
+  setTimeout(poll, 300);
+}
+function camLoop() {
+  if ($("#op").open && status && !status.sim) {
+    const img = $("#cam");
+    img.style.display = "";
+    img.src = "/api/camera.jpg?t=" + Date.now();
+  }
+  setTimeout(camLoop, 250);
+}
+
+$("#stopBtn").onclick = () => api("/api/stop");
+$("#startBtn").onclick = () => api("/api/cut", { lengths: lengths(), fade_to: fadeTo() });
+$("#contBtn").onclick = () => api("/api/cut", { lengths: lengths(), fade_to: fadeTo(), resume: true });
+$("#pauseBtn").onclick = () => api(status.state === "PAUSED" ? "/api/resume" : "/api/pause");
+$("#homeBtn").onclick = () => api("/api/home");
+$("#resetBtn").onclick = () => api("/api/reset");
+$("#calStart").onclick = () => api("/api/calibrate/start");
+$("#calRec").onclick = () => api("/api/calibrate/record");
+$("#calFin").onclick = () => api("/api/calibrate/finish");
+$("#simMove").onclick = () => api("/api/sim/head_move");
+$("#defCal").onclick = () => api("/api/calibrate/default");
+document.querySelectorAll("[data-jog]").forEach(b => b.onclick = () => api("/api/jog", { mm: +b.dataset.jog }));
+document.addEventListener("keydown", e => { if (e.code === "Space" || e.key === "Escape") { e.preventDefault(); api("/api/stop"); } });
+
+(async () => {
+  const r = await fetch("/api/styles"); const j = await r.json();
+  styles = j.styles; gmin = j.guard_min; gmax = j.guard_max;
+  $("#lmin").textContent = gmin + " mm"; $("#lmax").textContent = gmax + " mm";
+  $("#lbar").style.background = `linear-gradient(90deg, ${color(gmin)}, ${color(gmax)})`;
+  buildUI(); poll(); camLoop();
+})();
+</script>
+</body>
+</html>

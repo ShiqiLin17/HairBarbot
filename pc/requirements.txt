@@ -1,0 +1,6 @@
+flask>=3.0
+pyserial>=3.5
+numpy>=1.24
+# camera / head tracking (only needed on the real machine, not for --sim)
+opencv-python>=4.8
+mediapipe==0.10.14   # uses mp.solutions.face_mesh; needs Python 3.9-3.12
