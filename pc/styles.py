@@ -11,11 +11,17 @@ Optional fade: sides/back get shorter toward the bottom, down to `fade_to` mm.
 import numpy as np
 
 import config
-from kinematics import max_pitch
+from orientation import max_pitch
 
 REGIONS = ["top", "front", "sides", "back", "nape"]
 
 STYLES = {
+    "even20": {
+        "name": "Even 2 cm",
+        "desc": "2 cm all over. A simple, tidy trim.",
+        "lengths": {"top": 20, "front": 20, "sides": 20, "back": 20, "nape": 20},
+        "fade_to": None,
+    },
     "buzz": {
         "name": "Buzz cut",
         "desc": "Same length everywhere. Simplest and fastest.",
@@ -53,10 +59,11 @@ def guard_length(yaw: float, pitch: float, lengths: dict, fade_to=None) -> float
                             [lengths["front"], lengths["front"], lengths["sides"],
                              lengths["sides"], lengths["back"], lengths["back"]]))
     if fade_to is not None:
-        mp = max_pitch(yaw)
-        if mp > 55:
-            t = _clamp((pitch - 55) / (mp - 55), 0.0, 1.0)
-            lower = lower + (fade_to - lower) * t
+        # smooth version of the no-cut boundary, so the fade has no steps as you move around the head
+        mp = float(np.interp(ay, [0, 50, 70, 115, 135, 180], [55, 55, 72, 75, 90, 105]))
+        # fade over a wide band (from 40 deg down to the edge) so the guard never has to jump
+        t = _clamp((pitch - 40) / (mp - 40), 0.0, 1.0)
+        lower = lower + (fade_to - lower) * t
     if ay > 115:
         w = _clamp((ay - 115) / 20.0, 0.0, 1.0) * _clamp((pitch - 85) / 10.0, 0.0, 1.0)
         lower = lower * (1 - w) + lengths["nape"] * w

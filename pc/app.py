@@ -1,51 +1,41 @@
-"""HairBarbot server: runs the controller and serves the client app.
+"""HairBarbot handheld controller + API. The live app (pc/live, Node.js) is the user interface.
 
-  python app.py --sim          # no hardware: fake machine + fake camera (start here!)
-  python app.py                # real machine on config.SERIAL_PORT + webcam
-  python app.py --port COM3    # override the serial port
-
-Then open http://localhost:5000 (or http://<laptop-ip>:5000 on a phone/tablet on the same Wi-Fi).
+  python app.py --sim          # no hardware: fake board + fake user (the live app's `npm run demo` does this)
+  python app.py --port COM3    # real board (Windows), or --port /dev/cu.usbserial-XXXX (Mac)
 """
 import argparse
 import logging
-import os
 
-from flask import Flask, jsonify, request, send_from_directory, Response
+from flask import Flask, jsonify, request
 
 import config
 from controller import Controller, ControllerError
 from styles import STYLES, preview_grid, validate_lengths
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-
 
 def create_app(sim=True, port=None, speedup=1.0):
     if sim:
         from serial_link import SimLink
-        from head_tracker import SimTracker
-        link, tracker = SimLink(speedup=speedup), SimTracker()
+        link = SimLink(speedup=speedup)
     else:
         from serial_link import SerialLink
-        from head_tracker import CameraTracker
-        link, tracker = SerialLink(port or config.SERIAL_PORT), CameraTracker()
-    ctl = Controller(link, tracker, sim=sim)
-    app = Flask(__name__, static_folder=None)
+        link = SerialLink(port or config.SERIAL_PORT)
+    ctl = Controller(link, sim=sim)
+    app = Flask(__name__)
     app.config["ctl"] = ctl
 
-    def ok(**kw):
-        return jsonify({"ok": True, **kw, "status": ctl.status()})
+    def ok():
+        return jsonify({"ok": True, "status": ctl.status()})
 
     @app.errorhandler(ControllerError)
-    def ctl_error(e):
-        return jsonify({"ok": False, "error": str(e), "status": ctl.status()}), 400
-
     @app.errorhandler(ValueError)
-    def val_error(e):
+    def handled(e):
         return jsonify({"ok": False, "error": str(e), "status": ctl.status()}), 400
 
     @app.get("/")
     def index():
-        return send_from_directory(os.path.join(HERE, "web"), "index.html")
+        return ("HairBarbot controller is running. Open the live app: cd pc/live && npm start, "
+                "then http://localhost:3000"), 200, {"Content-Type": "text/plain"}
 
     @app.get("/api/state")
     def state():
@@ -58,14 +48,8 @@ def create_app(sim=True, port=None, speedup=1.0):
     @app.post("/api/preview")
     def preview():
         body = request.get_json(force=True)
-        lengths = validate_lengths(body["lengths"])
         fade = body.get("fade_to")
-        fade = None if fade in (None, "", False) else float(fade)
-        return jsonify(preview_grid(lengths, fade))
-
-    @app.get("/api/plan")
-    def plan():
-        return jsonify(ctl.plan_dict())
+        return jsonify(preview_grid(validate_lengths(body["lengths"]), None if fade in (None, "", False) else float(fade)))
 
     @app.post("/api/home")
     def home():
@@ -77,19 +61,9 @@ def create_app(sim=True, port=None, speedup=1.0):
         ctl.calib_start()
         return ok()
 
-    @app.post("/api/calibrate/goto/<int:i>")
-    def cal_goto(i):
-        ctl.calib_goto(i)
-        return ok()
-
-    @app.post("/api/jog")
-    def jog():
-        ctl.jog(float(request.get_json(force=True)["mm"]))
-        return ok()
-
-    @app.post("/api/calibrate/record")
-    def cal_record():
-        ctl.calib_record()
+    @app.post("/api/calibrate/record/<int:i>")
+    def cal_record(i):
+        ctl.calib_record(i)
         return ok()
 
     @app.post("/api/calibrate/finish")
@@ -102,20 +76,15 @@ def create_app(sim=True, port=None, speedup=1.0):
         ctl.calib_default()
         return ok()
 
-    @app.post("/api/cut")
-    def cut():
-        body = request.get_json(force=True)
-        ctl.start_cut(body.get("lengths"), body.get("fade_to"), resume=bool(body.get("resume")), style=body.get("style"))
+    @app.post("/api/start")
+    def start():
+        b = request.get_json(force=True)
+        ctl.start(b.get("lengths"), b.get("fade_to"), b.get("style"))
         return ok()
 
-    @app.post("/api/pause")
-    def pause():
-        ctl.pause()
-        return ok()
-
-    @app.post("/api/resume")
-    def resume():
-        ctl.resume()
+    @app.post("/api/finish")
+    def finish():
+        ctl.finish("Finished by the user")
         return ok()
 
     @app.post("/api/stop")
@@ -128,19 +97,19 @@ def create_app(sim=True, port=None, speedup=1.0):
         ctl.reset()
         return ok()
 
-    @app.post("/api/sim/head_move")
-    def sim_head_move():
+    @app.post("/api/sim/trigger")
+    def sim_trigger():
         if not ctl.sim:
-            raise ControllerError("only in --sim")
-        ctl.tracker.simulate_move()
+            raise ControllerError("Only in simulation.")
+        ctl.link.sim_toggle_trigger()
         return ok()
 
-    @app.get("/api/camera.jpg")
-    def camera():
-        jpg = ctl.tracker.jpeg()
-        if jpg is None:
-            return Response(status=404)
-        return Response(jpg, mimetype="image/jpeg", headers={"Cache-Control": "no-store"})
+    @app.post("/api/sim/face")
+    def sim_face():
+        if not ctl.sim:
+            raise ControllerError("Only in simulation.")
+        ctl.link.sim_wander_to_face()
+        return ok()
 
     return app
 
@@ -148,11 +117,11 @@ def create_app(sim=True, port=None, speedup=1.0):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--sim", action="store_true", help="run without hardware")
-    ap.add_argument("--port", help="serial port, e.g. COM3 or /dev/ttyACM0")
-    ap.add_argument("--speedup", type=float, default=1.0, help="sim only: run the fake machine faster")
+    ap.add_argument("--port", help="serial port, e.g. COM3 or /dev/cu.usbserial-0001")
+    ap.add_argument("--speedup", type=float, default=1.0, help="simulation only: run the fake user faster")
     ap.add_argument("--http", type=int, default=5000)
     a = ap.parse_args()
-    logging.getLogger("werkzeug").setLevel(logging.WARNING)   # no log line for every 10 Hz status poll
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
     app = create_app(sim=a.sim, port=a.port, speedup=a.speedup)
-    print(f"HairBarbot app: http://localhost:{a.http}   ({'SIMULATION' if a.sim else 'REAL MACHINE'})")
-    app.run(host="0.0.0.0", port=a.http, threaded=True)
+    print(f"HairBarbot controller on http://localhost:{a.http}  ({'SIMULATION' if a.sim else 'REAL BOARD'})")
+    app.run(host="127.0.0.1", port=a.http, threaded=True)

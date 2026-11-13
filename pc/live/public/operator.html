@@ -45,14 +45,22 @@
   .pts { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
   .pts li { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 14px; }
   .pts li.cur { color: var(--accent); font-weight: 700; }
-  .cam { width: 100%; aspect-ratio: 4 / 3; background: #000; border-radius: 10px; object-fit: cover; display: block; }
-  .camnote { font-size: 13px; color: var(--muted); }
   .log { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13px; max-height: 360px; overflow: auto; }
   .log li { display: grid; grid-template-columns: 92px 1fr; gap: 8px; }
   .log time { font-family: var(--mono); color: var(--muted); font-size: 12px; }
   .log li.error { color: var(--stop); font-weight: 600; }
   .log li.ok { color: var(--ok); }
   .small { font-size: 13px; color: var(--muted); margin: 0; }
+  .decision { display: grid; gap: 2px; padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel-2); }
+  .decision b { font-size: 20px; letter-spacing: .04em; }
+  .decision span { font-size: 13px; color: var(--muted); }
+  .decision.on { background: color-mix(in srgb, var(--stop) 14%, var(--panel)); border-color: var(--stop); }
+  .decision.on b { color: var(--stop); }
+  .decision.ok b { color: var(--ok); }
+  .reg { display: grid; grid-template-columns: 90px 1fr 44px; gap: 10px; align-items: center; font-size: 14px; text-transform: capitalize; }
+  .reg b { text-align: right; font-family: var(--mono); font-weight: 500; }
+  .rtrack { height: 10px; border-radius: 5px; background: var(--panel-2); border: 1px solid var(--line); overflow: hidden; }
+  .rtrack div { height: 100%; background: var(--ok); }
 </style>
 </head>
 <body>
@@ -60,7 +68,7 @@
   <div class="brand">Hair<b>Barbot</b><span>Operator</span></div>
   <div class="chips">
     <span class="chip" id="linkChip"><i></i>Link</span>
-    <span class="chip" id="fwChip"><i></i>Firmware</span>
+    <span class="chip" id="fwChip"><i></i>Board</span>
     <span class="chip" id="stateChip"><i></i>State</span>
   </div>
 </header>
@@ -69,48 +77,46 @@
 <main>
   <div class="col">
     <div class="card">
-      <h2>Live view <span id="progTxt" class="num"></span></h2>
+      <h2>Live view <span id="covTxt" class="num"></span></h2>
       <div class="view3d" id="view"></div>
     </div>
     <div class="card">
       <h2>Machine</h2>
       <div class="btns">
-        <button class="b primary" id="homeBtn">Home</button>
-        <button class="b" id="pauseBtn">Pause</button>
+        <button class="b primary" id="homeBtn">Home guard</button>
+        <button class="b" id="finishBtn">Finish haircut</button>
         <button class="b" id="resetBtn">Reset after stop</button>
       </div>
       <div class="btns" id="simTools" hidden>
         <button class="b" id="defBtn">Skip calibration (sim)</button>
-        <button class="b" id="bumpBtn">Simulate head movement</button>
+        <button class="b" id="trigBtn">Toggle trigger (sim)</button>
+        <button class="b" id="faceBtn">Drift to face (sim)</button>
       </div>
     </div>
     <div class="card">
-      <h2>Head calibration <span id="headSize" class="num"></span></h2>
-      <p class="small">Client seated, chin on the rest. Go to each point, jog until the comb just touches the hair, then Record. 4+ points.</p>
+      <h2>Sensor calibration <span id="calTxt"></span></h2>
+      <p class="small">Headband on. For each spot, hold the clipper against the head pointing straight at it, keep still, and press Record. 3 or more spots.</p>
       <div class="btns"><button class="b" id="calStart">Start calibration</button></div>
       <ul class="pts" id="pts"></ul>
-      <div class="btns">
-        <button class="b" data-jog="-5">− 5</button><button class="b" data-jog="-1">− 1</button>
-        <button class="b" data-jog="1">+ 1</button><button class="b" data-jog="5">+ 5 mm</button>
-      </div>
-      <div class="btns"><button class="b" id="calRec">Record touch</button><button class="b primary" id="calFin">Finish</button></div>
+      <div class="btns"><button class="b primary" id="calFin">Finish calibration</button></div>
     </div>
   </div>
 
   <div class="col">
     <div class="card">
-      <h2>Axes</h2>
-      <div id="gauges" style="display:grid;gap:14px"></div>
+      <h2>Clipper decision</h2>
+      <div class="decision off" id="decision"><b>CLIPPER OFF</b><span>--</span></div>
+      <div class="kv" id="loc"></div>
     </div>
     <div class="card">
-      <h2>Wrong-spot check · guard vs plan <span class="num" id="guardErr"></span></h2>
+      <h2>Wrong-spot check · guard vs this spot</h2>
       <canvas class="chart" id="guardChart"></canvas>
       <div class="legend"><span><i style="background:var(--data)"></i>actual guard</span><span><i style="background:var(--accent)"></i>needed here</span><span><i style="background:color-mix(in srgb, var(--accent) 25%, transparent);height:8px"></i>±1.5 mm allowed</span></div>
     </div>
     <div class="card">
-      <h2>Depth check · comb vs scalp <span class="num" id="depthTxt"></span></h2>
-      <canvas class="chart" id="depthChart"></canvas>
-      <div class="legend"><span><i style="background:var(--data)"></i>comb tip − scalp (mm)</span><span><i style="background:var(--stop)"></i>stop line −6 mm</span></div>
+      <h2>Contact · distance to scalp</h2>
+      <canvas class="chart" id="tofChart"></canvas>
+      <div class="legend"><span><i style="background:var(--data)"></i>ToF reading (mm)</span><span><i style="background:var(--muted)"></i>"on the head" threshold</span></div>
     </div>
   </div>
 
@@ -120,9 +126,8 @@
       <div class="kv" id="sensors"></div>
     </div>
     <div class="card">
-      <h2>Camera</h2>
-      <img class="cam" id="cam" alt="Camera view of the client's face" hidden>
-      <p class="camnote" id="camNote">No camera in simulation.</p>
+      <h2>Coverage by area</h2>
+      <div id="regions" style="display:grid;gap:8px"></div>
     </div>
     <div class="card">
       <h2>Event log</h2>

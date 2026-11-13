@@ -1,433 +1,355 @@
-"""The brain: state machine, calibration, running a haircut, and the safety watchdog.
+"""The brain of the handheld HairBarbot: state machine, calibration, guard targeting, clipper permit,
+coverage tracking, and safety checks. Runs a 50 Hz loop.
 
 States
-  NOT_HOMED   -> HOMING -> IDLE (homed, head not calibrated)
-  IDLE        -> CALIBRATING -> READY
-  READY/DONE  -> CUTTING <-> PAUSED -> DONE
-  any         -> STOPPED (E-stop, app STOP, or a safety check failed) -> reset -> READY/IDLE
+  NOT_HOMED -> HOMING -> IDLE (guard homed, sensors not calibrated)
+  IDLE/READY -> CALIBRATING -> READY
+  READY/DONE -> CUTTING -> DONE
+  any -> STOPPED (app STOP, E-stop, board fault, lost connection) -> reset -> READY / IDLE
 
-Safety watchdog (runs 50x per second while cutting) stops the machine if:
-  - the camera says the head moved/turned or the face is not visible
-  - the firmware reports a fault, or its status stops arriving
-  - the clipper is on where the plan doesn't expect it
-  - the clipper is on outside the allowed zone (face / ears)
-  - "WRONG SPOT": the guard length doesn't match the haircut at the spot the cutter is on
-  - the comb is pressing deeper into the head than the head model allows
+Every loop while CUTTING:
+  1. read both orientation sensors -> where on the head the clipper is (yaw, pitch)
+  2. look up the hair length the chosen style wants there -> send that guard length to the board
+  3. allow the clipper ONLY if: trigger held, sensors OK, not near the face/ears, and the guard
+     is already at the right length for this spot ("wrong spot -> clipper off immediately")
+  4. mark the area under the clipper as cut -> coverage map for the app
 """
 import collections
+import math
 import threading
 import time
 import traceback
 
-import config
-from kinematics import HeadModel, max_pitch, comb_tip_radius
-from planner import plan_haircut, estimate_minutes, PlanError
-from styles import guard_length, validate_lengths, region_name, STYLES
+import numpy as np
 
-CALIB_POSES = [
-    ("Crown (top)", 0.0, 0.0),
-    ("Left side", 90.0, 60.0),
-    ("Right side", -90.0, 60.0),
-    ("Back", 170.0, 75.0),
-    ("Front top", 0.0, 35.0),
-]
-CALIB_GUARD = 10.0
+import config
+from orientation import calibrate, direction, in_cut_zone, locate, max_pitch, measured_vector
+from styles import STYLES, guard_length, region_name, validate_lengths
+
+# coverage grid: same layout as styles.preview_grid (pitch rows 0..110 step 5, yaw cols -180..180 step 10)
+GRID_YAW = list(range(-180, 181, 10))
+GRID_PITCH = list(range(0, 111, 5))
+
+HINTS = {
+    "trigger": "Hold the trigger to cut.",
+    "zone": "Too close to the face or ears. Trim there by hand.",
+    "guard": "Slow down: the guard is adjusting.",
+    "sensors": "Can't tell where the clipper is. Check the sensors.",
+    "estop": "E-stop is pressed.",
+}
 
 
 class ControllerError(Exception):
     pass
 
 
-class Abort(Exception):
-    pass
-
-
 class Controller:
-    def __init__(self, link, tracker, sim=False):
+    def __init__(self, link, sim=False):
         self.link = link
-        self.tracker = tracker
         self.sim = sim
         self.state = "NOT_HOMED"
-        self.message = "Press Home to start."
-        self.head = HeadModel()
-        self.calibrated = False
-        self.calib_points = []          # (name, yaw, pitch, r)
-        self.calib_idx = None
+        self.message = "Press Home to get the guard ready."
+        self.busy = False
+        self.M = None                       # calibration rotation (head sensor -> head)
+        self.calib_err = None
+        self.calib_pairs = {}               # pose index -> (v, n)
+        self.recent_v = collections.deque(maxlen=15)
         self.lengths = None
         self.fade_to = None
-        self.strokes = []
-        self.next_stroke = 0
-        self.est_minutes = 0.0
-        self.clip_expected = False
-        self._clip_off_t = 0.0
-        self.busy = False
-        self._abort = threading.Event()
-        self._pause = threading.Event()
-        self._worker = None
-        self.events = collections.deque(maxlen=60)
         self.style_key = None
+        self.loc = None                     # (yaw, pitch) or None
+        self.target = config.GUARD_MAX
+        self.block = None                   # why the clipper is not allowed right now
+        self.contact = False
         self.started_at = None
         self.finished_at = None
-        self.stroke_times = []
-        self.plan_version = 0
-        self.tracker.start()
-        threading.Thread(target=self._watchdog, daemon=True).start()
+        self.events = collections.deque(maxlen=60)
+        self._clip_bad_since = None
+        self._last_zone_log = 0.0
+        # coverage
+        self._cells = [(p, y) for p in GRID_PITCH for y in GRID_YAW]
+        self._cell_dir = np.array([direction(y, p) for p, y in self._cells])
+        self._cuttable = np.array([p <= max_pitch(y) for p, y in self._cells])
+        self._dwell = np.zeros(len(self._cells))
+        threading.Thread(target=self._loop, daemon=True).start()
 
     # ------------------------------------------------------------ helpers
-    def _bg(self, fn, *args):
+    def _log(self, text, kind="info"):
+        self.events.append({"t": time.time(), "text": text, "kind": kind})
+
+    def _require(self, *states):
+        if self.state not in states:
+            raise ControllerError(f"Not allowed while {self.state.replace('_', ' ').lower()}.")
+
+    def _bg(self, fn):
         if self.busy:
-            raise ControllerError("Machine is busy, wait a moment.")
+            raise ControllerError("Busy, try again in a moment.")
         self.busy = True
 
         def run():
             try:
-                fn(*args)
-            except Abort:
-                pass
-            except Exception as e:  # never leave the clipper on after an error
+                fn()
+            except Exception as e:
                 traceback.print_exc()
                 self.stop(f"Software error: {e}")
             finally:
                 self.busy = False
-        self._worker = threading.Thread(target=run, daemon=True)
-        self._worker.start()
-
-    def _move(self, yaw, pitch, rad, guard, feed, timeout=60):
-        if self._abort.is_set():
-            raise Abort()
-        self.link.move(yaw, pitch, rad, guard, feed)
-        if not self.link.wait_done(timeout, self._abort):
-            if self._abort.is_set():
-                raise Abort()
-            raise ControllerError(f"Move failed: {self.link.last_error or self.link.last_fault or 'timeout'}")
-
-    def _require(self, *states):
-        if self.state not in states:
-            raise ControllerError(f"Not allowed while {self.state}.")
-
-    def _log(self, text, kind="info"):
-        self.events.append({"t": time.time(), "text": text, "kind": kind})
+        threading.Thread(target=run, daemon=True).start()
 
     # ------------------------------------------------------------ homing
     def home(self):
         self._require("NOT_HOMED", "IDLE", "READY", "DONE")
 
         def run():
-            self.state, self.message = "HOMING", "Homing all axes..."
+            self.state, self.message = "HOMING", "Homing the guard..."
             self.link.home()
-            if not self.link.wait_done(120, self._abort) or not self.link.get_status()["homed"]:
+            ok = self.link.wait_done(40)
+            t_end = time.time() + 1.0          # DONE arrives before the next status line says "homed"
+            while ok and not self.link.get_status()["homed"] and time.time() < t_end:
+                time.sleep(0.02)
+            if not ok or not self.link.get_status()["homed"]:
                 self.stop(f"Homing failed: {self.link.last_fault or self.link.last_error or 'timeout'}")
                 return
-            self.state = "READY" if self.calibrated else "IDLE"
-            self.message = "Homed. Seat the client and calibrate." if not self.calibrated else "Ready."
-            self._log("Machine homed")
+            self._log("Guard homed")
+            if self.M is not None:
+                self.state, self.message = "READY", "Ready. Choose a haircut."
+            else:
+                self.state, self.message = "IDLE", "Put on the headband, then calibrate."
         self._bg(run)
 
     # ------------------------------------------------------------ calibration
     def calib_start(self):
         self._require("IDLE", "READY", "DONE")
-        self.calib_points = []
-        self.calib_idx = None
-        self.calibrated = False
+        self.calib_pairs = {}
         self.state = "CALIBRATING"
-        self.message = "Go to each point, jog the comb until it just touches the hair, then Record."
+        self.message = "Hold the clipper at each spot, pointing straight at the head, and press Record."
+        self._log("Calibration started")
 
-    def calib_goto(self, i):
+    def calib_record(self, i):
         self._require("CALIBRATING")
-        if not 0 <= i < len(CALIB_POSES):
-            raise ControllerError("bad point")
-        name, yaw, pitch = CALIB_POSES[i]
-
-        def run():
-            st = self.link.get_status()
-            self._move(st["yaw"], st["pitch"], 0.0, CALIB_GUARD, config.FEED_TRAVEL)   # pull back first
-            self._move(yaw, pitch, 0.0, CALIB_GUARD, config.FEED_TRAVEL)
-            self.calib_idx = i
-            self.message = f"At '{name}'. Jog in until the comb touches, then Record."
-        self._bg(run)
-
-    def jog(self, mm):
-        self._require("CALIBRATING")
-        if self.calib_idx is None:
-            raise ControllerError("Go to a calibration point first.")
+        if not 0 <= i < len(config.CALIB_POSES):
+            raise ControllerError("Unknown calibration spot.")
+        name, yaw, pitch = config.CALIB_POSES[i]
+        if self.sim:
+            self.link.sim_place(yaw, pitch)
+            time.sleep(0.4)                         # let a few readings arrive at the new spot
         st = self.link.get_status()
-        target = max(config.RAD_MIN, min(config.RAD_MAX, st["rad"] + float(mm)))
-        self._bg(self._move, st["yaw"], st["pitch"], target, st["guard"], 10)
-
-    def calib_record(self):
-        self._require("CALIBRATING")
-        if self.calib_idx is None:
-            raise ControllerError("Go to a calibration point first.")
-        st = self.link.get_status()
-        r = comb_tip_radius(st["rad"], st["guard"])
-        name = CALIB_POSES[self.calib_idx][0]
-        self.calib_points = [p for p in self.calib_points if p[0] != name]
-        self.calib_points.append((name, st["yaw"], st["pitch"], r))
-        self.message = f"Recorded {name}: {r:.0f} mm from head center."
+        if not (st["clip_imu"] and st["head_imu"]):
+            raise ControllerError("Both orientation sensors must be working to calibrate.")
+        if len(self.recent_v) < 5:
+            raise ControllerError("No sensor readings yet. Wait a second and try again.")
+        v = np.mean(list(self.recent_v)[-10:], axis=0)
+        v /= np.linalg.norm(v)
+        self.calib_pairs[i] = (v, direction(yaw, pitch))
+        self.message = f"Recorded: {name}. {len(self.calib_pairs)} of {len(config.CALIB_POSES)} spots."
 
     def calib_finish(self):
         self._require("CALIBRATING")
-        if len(self.calib_points) < 4:
-            raise ControllerError("Record at least 4 points.")
         try:
-            self.head = HeadModel.fit([(y, p, r) for _, y, p, r in self.calib_points])
+            M, err = calibrate(list(self.calib_pairs.values()))
         except ValueError as e:
             raise ControllerError(str(e))
-        if not self.tracker.set_reference():
-            raise ControllerError("Camera can't see the face. Fix the camera, then press Finish again.")
-
-        def run():
-            st = self.link.get_status()
-            self._move(st["yaw"], st["pitch"], 0.0, st["guard"], config.FEED_TRAVEL)
-            self.calibrated = True
-            self.state = "READY"
-            self._log(f"Head calibrated ({2*self.head.a:.0f} x {2*self.head.b:.0f} mm)", "ok")
-            self.message = (f"Calibrated. Head size {2*self.head.a:.0f} x {2*self.head.b:.0f} mm. "
-                            "Choose a haircut and press Start.")
-        self._bg(run)
+        if err > config.CALIB_MAX_ERROR_DEG:
+            raise ControllerError(f"Spots disagree by {err:.0f} degrees. Re-record them, holding the clipper "
+                                  "straight at the head and keeping the head still.")
+        self.M, self.calib_err = M, err
+        self.state = "READY"
+        self.message = f"Calibrated (accuracy about {err:.0f}°). Choose a haircut."
+        self._log(f"Calibrated, worst spot off by {err:.1f}°", "ok")
 
     def calib_default(self):
-        """Skip touch-off and use the default head model. For simulation / mannequin testing."""
+        """Simulation only: use the simulator's true mounting instead of touching spots."""
+        if not self.sim:
+            raise ControllerError("Only available in simulation.")
         self._require("IDLE", "READY", "DONE", "CALIBRATING")
-        self.head = HeadModel()
-        self.tracker.set_reference()
-        self.calibrated = True
-        self.state = "READY"
-        self.message = "Using default head model (testing only)."
-        self._log("Default head model loaded (testing)")
+        self.M, self.calib_err = self.link.M_true.copy(), 0.0
+        self.state, self.message = "READY", "Calibrated (simulation). Choose a haircut."
+        self._log("Simulated calibration loaded")
 
-    # ------------------------------------------------------------ preview / planning
-    def make_plan(self, lengths, fade_to):
-        lengths = validate_lengths(lengths)
-        fade_to = None if fade_to in (None, "", False) else float(fade_to)
-        try:
-            strokes = plan_haircut(lengths, fade_to, self.head)
-        except PlanError as e:
-            raise ControllerError(str(e))
-        return lengths, fade_to, strokes
-
-    # ------------------------------------------------------------ cutting
-    def start_cut(self, lengths, fade_to=None, resume=False, style=None):
+    # ------------------------------------------------------------ session
+    def start(self, lengths, fade_to=None, style=None):
         self._require("READY", "DONE")
-        if not self.tracker.snapshot()["ok"]:
-            raise ControllerError("Camera check failed: " + self.tracker.snapshot()["reason"])
-        if resume and self.strokes and 0 < self.next_stroke < len(self.strokes):
-            start = self.next_stroke
-        else:
-            self.lengths, self.fade_to, self.strokes = self.make_plan(lengths, fade_to)
-            self.est_minutes = estimate_minutes(self.strokes)
-            self.style_key = style if style in STYLES else None
-            self.started_at = time.time()
-            self.finished_at = None
-            self.stroke_times = []
-            self.plan_version += 1
-            start = 0
-        self._abort.clear()
-        self._pause.clear()
-        self.state = "CUTTING"
-        self.message = "Cutting. Keep still."
-        name = STYLES[self.style_key]["name"] if self.style_key else "Custom"
-        self._log(f"Resumed at stroke {start + 1}" if start else f"Haircut started: {name}", "ok")
-        self._bg(self._run_cut, start)
-
-    def _wait_if_paused(self, wp):
-        if not self._pause.is_set():
-            return
-        self._clip(False)
-        st = self.link.get_status()
-        self._move(st["yaw"], st["pitch"], 0.0, st["guard"], config.FEED_PLUNGE)
-        self.state, self.message = "PAUSED", "Paused. Press Resume to continue."
-        while self._pause.is_set():
-            if self._abort.is_set():
-                raise Abort()
-            time.sleep(0.05)
-        self.state, self.message = "CUTTING", "Cutting. Keep still."
-        self._move(wp.yaw, wp.pitch, max(0.0, wp.rad - config.APPROACH_GAP), wp.guard, config.FEED_PLUNGE)
-        self._move(wp.yaw, wp.pitch, wp.rad, wp.guard, config.FEED_PLUNGE)
-        self._clip(True)
-
-    def _clip(self, on):
-        if on:
-            self.clip_expected = True
-            if not self.link.clipper(True):
-                self.clip_expected = False
-                raise ControllerError(f"Clipper refused: {self.link.last_error}")
-        else:
-            self.link.clipper(False)
-            self.clip_expected = False
-            self._clip_off_t = time.time()
-
-    def _run_cut(self, start):
+        self.lengths = validate_lengths(lengths)
+        self.fade_to = None if fade_to in (None, "", False) else float(fade_to)
+        self.style_key = style if style in STYLES else None
+        self._dwell[:] = 0.0
+        self.started_at, self.finished_at = time.time(), None
         self.link.vacuum(True)
-        for k in range(start, len(self.strokes)):
-            self.next_stroke = k
-            t_stroke = time.time()
-            stroke = self.strokes[k]
-            first = stroke[0]
-            st = self.link.get_status()
-            # travel: retract, rotate to the stroke, set guard, then plunge onto the head
-            self._move(st["yaw"], st["pitch"], 0.0, st["guard"], config.FEED_TRAVEL)
-            self._move(first.yaw, first.pitch, 0.0, first.guard, config.FEED_TRAVEL)
-            self._move(first.yaw, first.pitch, max(0.0, first.rad - config.APPROACH_GAP), first.guard, config.FEED_TRAVEL)
-            self._move(first.yaw, first.pitch, first.rad, first.guard, config.FEED_PLUNGE)
-            self._clip(True)
-            for wp in stroke[1:]:
-                self._wait_if_paused(wp)
-                self._move(wp.yaw, wp.pitch, wp.rad, wp.guard, config.FEED_CUT)
-            self._clip(False)
-            last = stroke[-1]
-            self._move(last.yaw, last.pitch, max(0.0, last.rad - config.APPROACH_GAP), last.guard, config.FEED_TRAVEL)
-            self.stroke_times.append(time.time() - t_stroke)
-            if (k + 1) % 4 == 0 or k + 1 == len(self.strokes):
-                self._log(f"{k + 1} of {len(self.strokes)} strokes done")
-        self.next_stroke = len(self.strokes)
-        st = self.link.get_status()
-        self._move(st["yaw"], st["pitch"], 0.0, st["guard"], config.FEED_TRAVEL)
-        self._move(0.0, 0.0, 0.0, config.GUARD_MAX, config.FEED_TRAVEL)
-        self.link.vacuum(False)
-        self.state, self.message = "DONE", "Haircut finished!"
-        self.finished_at = time.time()
-        self._log("Haircut finished", "ok")
+        self.state = "CUTTING"
+        self.message = HINTS["trigger"]
+        name = STYLES[self.style_key]["name"] if self.style_key else "Custom"
+        self._log(f"Haircut started: {name}", "ok")
+        if self.sim:
+            self.link.sim_auto(True)
 
-    def pause(self):
+    def finish(self, reason="Haircut finished"):
         self._require("CUTTING")
-        self._pause.set()
-        self.message = "Pausing after this step..."
-        self._log("Pause requested")
+        self.state = "DONE"
+        self.finished_at = time.time()
+        self.link.permit(False)
+        self.link.vacuum(False)
+        self.message = "All done!"
+        self._log(reason, "ok")
+        if self.sim:
+            self.link.sim_auto(False)
 
-    def resume(self):
-        self._require("PAUSED")
-        self._pause.clear()
-        self._log("Resumed")
-
-    def stop(self, reason="Stopped by user"):
-        self._abort.set()
-        self.clip_expected = False
-        try:
-            self.link.stop()
-        finally:
-            if self.state != "STOPPED":
-                self.state = "STOPPED"
-                self.message = reason
-                self._log(f"STOP: {reason}", "error")
+    def stop(self, reason="Stopped from the app"):
+        self.link.stop()
+        if self.sim:
+            self.link.sim_auto(False)
+        if self.state != "STOPPED":
+            self._before_stop = self.state
+            self.state = "STOPPED"
+            self.message = reason
+            self._log(f"STOP: {reason}", "error")
 
     def reset(self):
         self._require("STOPPED")
-        if self.busy:
-            raise ControllerError("Still stopping, try again in a second.")
         self.link.reset()
         time.sleep(0.2)
         st = self.link.get_status()
         if st["state"] == 4:
-            raise ControllerError("Machine still in fault (is the E-stop released?).")
-        self._abort.clear()
-        self._pause.clear()
+            raise ControllerError("Still in fault. Is the E-stop released?")
         if not st["homed"]:
             self.state, self.message = "NOT_HOMED", "Press Home."
-        elif self.calibrated:
-            self.state, self.message = "READY", "Reset. Press Continue to resume, or Start to begin again."
+        elif self.M is None:
+            self.state, self.message = "IDLE", "Calibrate the sensors."
         else:
-            self.state, self.message = "IDLE", "Reset. Calibrate the head."
+            self.state, self.message = "READY", "Reset. Start the haircut again when ready."
+        self._log("Reset after stop")
 
-    # ------------------------------------------------------------ watchdog
-    def _watchdog(self):
-        period = 1.0 / config.WATCHDOG_HZ
+    # ------------------------------------------------------------ 50 Hz loop
+    def _loop(self):
+        period = 1.0 / config.LOOP_HZ
+        last = time.time()
         while True:
             time.sleep(period)
-            if self.state not in ("CUTTING",):
-                # still catch firmware faults in any active state
-                if self.state in ("HOMING", "CALIBRATING", "PAUSED") and self.link.get_status()["state"] == 4:
-                    self.stop(f"Machine fault: {self.link.last_fault}")
-                continue
-            reason = self._check()
-            if reason:
-                self.stop(reason)
+            now = time.time()
+            dt = now - last
+            last = now
+            try:
+                self._tick(now, dt)
+            except Exception:
+                traceback.print_exc()
 
-    def _check(self):
-        snap = self.tracker.snapshot()
-        if not snap["ok"]:
-            return "Head check failed: " + snap["reason"]
+    def _tick(self, now, dt):
         st = self.link.get_status()
-        if st["age"] > 0.5:
-            return "Lost contact with the machine"
-        if st["state"] == 4:
-            return f"Machine fault: {self.link.last_fault}"
-        if not st["estop_ok"]:
-            return "E-stop pressed"
-        if st["clipper"]:
-            if not self.clip_expected:
-                # status lines are up to 100 ms old; allow time for "clipper off" to show up
-                if time.time() - self._clip_off_t > 0.5:
-                    return "Clipper on unexpectedly"
-                return None
-            y, p = st["yaw"], st["pitch"]
-            if p > max_pitch(y) + 2.0:
-                return f"Outside cutting zone (yaw {y:.0f}, pitch {p:.0f})"
-            need = guard_length(y, p, self.lengths, self.fade_to)
-            if abs(st["guard"] - need) > config.GUARD_TOL:
-                return f"WRONG SPOT: guard {st['guard']:.1f} mm but this spot needs {need:.1f} mm"
-            tip = comb_tip_radius(st["rad"], st["guard"])
-            if tip < self.head.radius(y, p) - config.DEPTH_TOL:
-                return "Comb pressing too deep"
-        return None
+        imus = st["clip_imu"] and st["head_imu"]
+        if imus:
+            self.recent_v.append(measured_vector(st["qc"], st["qh"]))
+        self.loc = locate(st["qc"], st["qh"], self.M) if (imus and self.M is not None) else None
+        self.contact = st["tof_ok"] and 0 < st["tof"] < st["guard"] + config.TOF_OFFSET + config.CONTACT_MARGIN
 
-    # ------------------------------------------------------------ status for the app
+        cutting = self.state == "CUTTING"
+        if cutting and self.loc:
+            self.target = guard_length(self.loc[0], self.loc[1], self.lengths, self.fade_to)
+        else:
+            self.target = config.GUARD_MAX         # idle: longest guard = safest
+        if st["homed"] and self.state != "STOPPED":
+            self.link.guard(self.target)
+
+        # ---- may the clipper run?
+        self.block = None
+        if cutting:
+            if not st["estop_ok"]:
+                self.block = "estop"
+            elif not self.loc:
+                self.block = "sensors"
+            elif not in_cut_zone(*self.loc):
+                self.block = "zone"
+            elif abs(st["guard"] - self.target) > config.GUARD_TOL:
+                self.block = "guard"
+            elif not st["trigger"]:
+                self.block = "trigger"
+        allowed = cutting and self.block is None
+        self.link.permit(allowed)
+
+        # ---- safety: things that STOP the session
+        if self.state in ("CUTTING", "CALIBRATING", "HOMING") and st["age"] > config.STATUS_STALE_S:
+            self.stop("Lost contact with the HairBarbot board.")
+            return
+        if self.state in ("CUTTING", "CALIBRATING", "READY") and st["state"] == 4:
+            self.stop(f"Board fault: {self.link.last_fault}")
+            return
+        if st["clipper"] and not allowed and not st["permit"]:
+            self._clip_bad_since = self._clip_bad_since or now
+            if now - self._clip_bad_since > config.UNEXPECTED_CLIP_S:
+                self.stop("Clipper was on without permission.")
+                return
+        else:
+            self._clip_bad_since = None
+
+        # ---- messages + coverage
+        if cutting:
+            if self.block == "zone" and now - self._last_zone_log > 4:
+                self._log("Clipper paused near the face/ears")
+                self._last_zone_log = now
+            if st["clipper"] and self.loc:
+                self.message = f"Cutting the {region_name(*self.loc)} at {st['guard']:.0f} mm."
+                if self.contact or not st["tof_ok"]:
+                    n = direction(*self.loc)
+                    near = self._cell_dir @ n > math.cos(math.radians(config.COVER_RADIUS_DEG))
+                    self._dwell[near] += dt
+            else:
+                self.message = HINTS.get(self.block, "Hold the trigger to cut.")
+            if self.coverage_pct() >= config.COVER_DONE:
+                self.finish("Whole head covered. Haircut finished!")
+
+    # ------------------------------------------------------------ coverage
+    def _done_mask(self):
+        return self._dwell >= config.COVER_DWELL_S
+
+    def coverage_pct(self):
+        return float(np.sum(self._done_mask() & self._cuttable) / np.sum(self._cuttable))
+
+    def coverage(self):
+        done = self._done_mask()
+        rows = []
+        k = 0
+        for p in GRID_PITCH:
+            row = []
+            for y in GRID_YAW:
+                row.append((1 if done[k] else 0) if self._cuttable[k] else None)
+                k += 1
+            rows.append(row)
+        regions = {}
+        for (p, y), d, c in zip(self._cells, done, self._cuttable):
+            if not c:
+                continue
+            r = region_name(y, p)
+            a, b = regions.get(r, (0, 0))
+            regions[r] = (a + int(d), b + 1)
+        reg = {r: round(a / b, 3) for r, (a, b) in regions.items()}
+        todo = [r for r, v in sorted(reg.items(), key=lambda kv: kv[1]) if v < 0.9]
+        return {"pct": round(self.coverage_pct(), 3), "rows": rows, "yaw_step": 10, "pitch_step": 5,
+                "regions": reg, "todo": todo}
+
+    # ------------------------------------------------------------ status for the apps
     def status(self):
         st = self.link.get_status()
+        loc = self.loc
+        live = {"need_guard": round(self.target, 1) if self.state == "CUTTING" and loc else None,
+                "guard_err": round(st["guard"] - self.target, 2), "block": self.block,
+                "hint": HINTS.get(self.block), "contact": self.contact, "elapsed": None}
+        if self.started_at:
+            live["elapsed"] = round((self.finished_at or time.time()) - self.started_at, 1)
         return {
             "state": self.state,
             "message": self.message,
             "busy": self.busy,
             "sim": self.sim,
-            "machine": st,
+            "machine": {k: v for k, v in st.items()},
             "fault": self.link.last_fault,
-            "tracker": self.tracker.snapshot(),
-            "progress": {"done": min(self.next_stroke, len(self.strokes)), "total": len(self.strokes)},
-            "est_minutes": self.est_minutes,
-            "calibration": {
-                "poses": [p[0] for p in CALIB_POSES],
-                "current": self.calib_idx,
-                "recorded": [p[0] for p in self.calib_points],
-                "calibrated": self.calibrated,
-                "head": {"a": round(self.head.a, 1), "b": round(self.head.b, 1), "c": round(self.head.c, 1)},
-            },
+            "location": ({"yaw": round(loc[0], 1), "pitch": round(loc[1], 1), "region": region_name(*loc),
+                          "in_zone": in_cut_zone(*loc)} if loc else None),
+            "live": live,
+            "coverage": self.coverage(),
+            "calibration": {"poses": [p[0] for p in config.CALIB_POSES], "recorded": sorted(self.calib_pairs),
+                            "calibrated": self.M is not None,
+                            "error_deg": None if self.calib_err is None else round(self.calib_err, 1)},
             "lengths": self.lengths,
             "fade_to": self.fade_to,
             "style": self.style_key,
-            "live": self._live(st),
             "events": list(self.events)[-25:],
-            "plan_version": self.plan_version,
             "server_time": time.time(),
-        }
-
-    def _live(self, st):
-        """Friendly live numbers for the apps."""
-        live = {"region": None, "need_guard": None, "elapsed": None, "eta_s": None, "stroke": None,
-                "tip_r": None, "scalp_r": None}
-        if st.get("homed"):
-            live["region"] = region_name(st["yaw"], st["pitch"])
-            live["tip_r"] = round(comb_tip_radius(st["rad"], st["guard"]), 1)
-            live["scalp_r"] = round(self.head.radius(st["yaw"], st["pitch"]), 1)
-        if self.lengths and st.get("homed"):
-            live["need_guard"] = round(guard_length(st["yaw"], st["pitch"], self.lengths, self.fade_to), 1)
-        if self.started_at:
-            end = self.finished_at or time.time()
-            live["elapsed"] = round(end - self.started_at, 1)
-            left = max(0, len(self.strokes) - self.next_stroke)
-            if self.finished_at:
-                live["eta_s"] = 0
-            elif self.stroke_times:
-                avg = sum(self.stroke_times[-6:]) / len(self.stroke_times[-6:])
-                live["eta_s"] = round(left * avg)
-            else:
-                live["eta_s"] = round(self.est_minutes * 60 * left / max(1, len(self.strokes)))
-        if self.strokes and self.state in ("CUTTING", "PAUSED"):
-            live["stroke"] = min(self.next_stroke + 1, len(self.strokes))
-        return live
-
-    def plan_dict(self):
-        return {
-            "version": self.plan_version,
-            "head": {"a": self.head.a, "b": self.head.b, "c": self.head.c},
-            "strokes": [[[w.yaw, w.pitch, w.guard] for w in s] for s in self.strokes],
         }

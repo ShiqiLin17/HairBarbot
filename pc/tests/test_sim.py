@@ -1,108 +1,134 @@
-"""End-to-end test in simulation:  python -m pytest tests  (or: python tests/test_sim.py)"""
-import os, sys, time
+"""Tests in simulation:  python tests/test_sim.py   (or: python -m pytest tests)"""
+import os
+import sys
+import time
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import numpy as np
 
 import config
 from app import create_app
-from kinematics import HeadModel, max_pitch, rad_for
-from planner import plan_haircut, estimate_minutes
+from orientation import calibrate, direction, in_cut_zone, matrix_to_quat, quat_to_matrix
+from serial_link import _axis_angle
 from styles import STYLES, guard_length
 
 
-def wait_state(c, states, timeout=60):
+def wait(c, cond, timeout=60, what=""):
     t = time.time() + timeout
     while time.time() < t:
         s = c.get("/api/state").get_json()
-        if s["state"] in states:
+        if cond(s):
             return s
         time.sleep(0.05)
-    raise AssertionError(f"timeout waiting for {states}, at {s['state']}: {s['message']}")
+    raise AssertionError(f"timeout waiting for {what}: state {s['state']}, {s['message']}")
 
 
-def test_plans_reachable_for_all_styles_and_head_sizes():
-    for a, b, c in [(90, 70, 100), (100, 78, 112), (112, 88, 125)]:
-        head = HeadModel(a, b, c)
-        for k, st in STYLES.items():
-            strokes = plan_haircut(st["lengths"], st["fade_to"], head)
-            assert len(strokes) == 23
-            for s in strokes:
-                for wp in s:
-                    assert wp.pitch <= max_pitch(wp.yaw) - config.ZONE_MARGIN + 1e-6
-
-
-def test_head_fit_recovers_model():
-    true = HeadModel(104, 80, 115)
-    pts = [(y, p, true.radius(y, p)) for y, p in [(0, 0), (90, 60), (-90, 60), (170, 75), (0, 35)]]
-    fit = HeadModel.fit(pts)
-    assert abs(fit.a - 104) < 1 and abs(fit.b - 80) < 1 and abs(fit.c - 115) < 1
-
-
-def test_full_haircut_and_safety_stops():
-    app = create_app(sim=True, speedup=60)
-    ctl = app.config["ctl"]
+def setup(speedup=40):
+    app = create_app(sim=True, speedup=speedup)
     c = app.test_client()
     assert c.post("/api/home").status_code == 200
-    wait_state(c, {"IDLE"})
-    # calibration with sim: go to points, jog to touch the default head, record
-    head = HeadModel()
-    c.post("/api/calibrate/start")
-    for i, (name, y, p) in enumerate([("Crown", 0, 0), ("L", 90, 60), ("R", -90, 60), ("Back", 170, 75)]):
-        assert c.post(f"/api/calibrate/goto/{i}").status_code == 200
-        while ctl.busy: time.sleep(0.02)
-        target = rad_for(head.radius(y, p), 10.0)
-        while abs(ctl.link.get_status()["rad"] - target) > 0.6:
-            step = max(-5, min(5, round(target - ctl.link.get_status()["rad"])))
-            c.post("/api/jog", json={"mm": step if step else (1 if target > ctl.link.get_status()["rad"] else -1)})
-            while ctl.busy: time.sleep(0.02)
-        assert c.post("/api/calibrate/record").status_code == 200
+    wait(c, lambda s: s["state"] == "IDLE", what="homed")
+    return app, c
+
+
+def test_quaternion_roundtrip():
+    for k in range(20):
+        R = _axis_angle(np.random.randn(3), np.random.uniform(0, 180))
+        assert np.allclose(quat_to_matrix(matrix_to_quat(R)), R, atol=1e-9)
+
+
+def test_calibration_math_recovers_mounting():
+    M_true = _axis_angle([0.3, 1, -0.2], 37)
+    pairs = [(M_true.T @ direction(y, p), direction(y, p)) for _, y, p in config.CALIB_POSES]
+    M, err = calibrate(pairs)
+    assert np.allclose(M, M_true, atol=1e-6) and err < 1e-3
+
+
+def test_calibrate_through_app_and_locate_with_wrist_roll():
+    app, c = setup()
+    ctl = app.config["ctl"]
+    assert c.post("/api/calibrate/start").status_code == 200
+    for i in range(len(config.CALIB_POSES)):
+        r = c.post(f"/api/calibrate/record/{i}")
+        assert r.status_code == 200, r.get_json()
     r = c.post("/api/calibrate/finish")
     assert r.status_code == 200, r.get_json()
-    s = wait_state(c, {"READY"})
-    assert abs(s["calibration"]["head"]["a"] - 100) < 3
-
-    # full haircut
-    st = STYLES["fade"]
-    r = c.post("/api/cut", json={"lengths": st["lengths"], "fade_to": st["fade_to"]})
-    assert r.status_code == 200, r.get_json()
-    # stop mid-way with a simulated head movement
-    time.sleep(1.0)
-    c.post("/api/sim/head_move")
-    s = wait_state(c, {"STOPPED"}, 10)
-    assert "Head" in s["message"], s["message"]
-    assert not ctl.link.get_status()["clipper"]
-    time.sleep(1.6)
-    while ctl.busy: time.sleep(0.02)
-    assert c.post("/api/reset").status_code == 200
-    # continue from where it stopped
-    r = c.post("/api/cut", json={"lengths": st["lengths"], "fade_to": st["fade_to"], "resume": True})
-    assert r.status_code == 200, r.get_json()
-    s = wait_state(c, {"DONE", "STOPPED"}, 300)
-    assert s["state"] == "DONE", s["message"]
-    assert s["progress"]["done"] == s["progress"]["total"] == 23
-    time.sleep(0.1)   # let the simulator publish its last status
-    m = ctl.link.get_status()
-    assert not m["clipper"] and not m["vacuum"] and m["rad"] == 0.0, m
+    assert r.get_json()["status"]["calibration"]["error_deg"] < 3
+    # location must follow the hand, whatever the wrist roll is doing
+    for yaw, pitch in [(0, 20), (90, 50), (-120, 70), (175, 90), (-30, 40)]:
+        ctl.link.sim_place(yaw, pitch)
+        time.sleep(0.15)
+        y, p = ctl.loc
+        dy = (y - yaw + 180) % 360 - 180
+        assert abs(p - pitch) < 3 and (abs(dy) < 3 or pitch < 5), (yaw, pitch, y, p)
 
 
-def test_wrong_spot_detection():
-    app = create_app(sim=True, speedup=60)
+def test_full_session_guard_follows_and_safety():
+    # real time: the fake user moves at 30 deg/s, like a person (takes ~2-3 minutes)
+    app, c = setup(speedup=1)
     ctl = app.config["ctl"]
-    c = app.test_client()
-    c.post("/api/home"); wait_state(c, {"IDLE"})
     c.post("/api/calibrate/default")
-    st = STYLES["classic"]
-    c.post("/api/cut", json={"lengths": st["lengths"], "fade_to": None})
-    # wait until actually cutting, then sabotage: force the guard to a wrong length
-    t = time.time() + 30
-    while not ctl.link.get_status()["clipper"] and time.time() < t: time.sleep(0.005)
-    ctl.link.start["guard"] = ctl.link.target["guard"] = ctl.link.pos["guard"] = 35.0  # simulate a slipped guard
-    s = wait_state(c, {"STOPPED"}, 5)
-    assert "WRONG SPOT" in s["message"], s["message"]
+    st = STYLES["fade"]
+    r = c.post("/api/start", json={"lengths": st["lengths"], "fade_to": st["fade_to"], "style": "fade"})
+    assert r.status_code == 200, r.get_json()
+    # while cutting, the clipper must never be on with the wrong guard or in a no-cut zone
+    checked = 0
+    face_tested = trigger_tested = False
+    t_end = time.time() + 400
+    while time.time() < t_end:
+        s = c.get("/api/state").get_json()
+        if s["state"] != "CUTTING":
+            break
+        # check the TRUE state inside the simulator: where the hand really is vs the real guard length
+        sim = ctl.link
+        if sim.clip:
+            yaw, pitch = sim.hand
+            need = guard_length(yaw, pitch, st["lengths"], st["fade_to"])
+            # allowed: the controller's tolerance + one 20 ms loop of hand movement
+            assert abs(sim.guard_mm - need) <= config.GUARD_TOL + 1.0, (sim.guard_mm, need, sim.hand)
+            assert in_cut_zone(yaw, pitch - 2), sim.hand
+            checked += 1
+        pct = s["coverage"]["pct"]
+        if pct > 0.3 and not face_tested:
+            c.post("/api/sim/face")
+            s2 = wait(c, lambda s: s["live"]["block"] == "zone", 5, "zone block")
+            time.sleep(0.05)
+            assert not c.get("/api/state").get_json()["machine"]["clipper"]
+            face_tested = True
+        if pct > 0.5 and not trigger_tested:
+            c.post("/api/sim/trigger")            # user lets go
+            wait(c, lambda s: not s["machine"]["clipper"], 2, "clipper off after trigger release")
+            c.post("/api/sim/trigger")            # and grabs it again
+            trigger_tested = True
+        time.sleep(0.005)
+    s = c.get("/api/state").get_json()
+    assert s["state"] == "DONE", (s["state"], s["message"], s["coverage"]["pct"])
+    assert s["coverage"]["pct"] >= config.COVER_DONE
+    assert checked > 50 and face_tested and trigger_tested
     time.sleep(0.2)
     assert not ctl.link.get_status()["clipper"]
+
+
+def test_stop_and_reset():
+    app, c = setup()
+    c.post("/api/calibrate/default")
+    c.post("/api/start", json={"lengths": STYLES["buzz"]["lengths"]})
+    wait(c, lambda s: s["machine"]["clipper"], 20, "clipper on")
+    c.post("/api/stop")
+    s = wait(c, lambda s: s["state"] == "STOPPED" and not s["machine"]["clipper"], 3, "stopped")
+    r = c.post("/api/reset")
+    assert r.status_code == 200 and r.get_json()["status"]["state"] == "READY"
+
+
+def test_start_refused_before_calibration():
+    app, c = setup()
+    r = c.post("/api/start", json={"lengths": STYLES["buzz"]["lengths"]})
+    assert r.status_code == 400
 
 
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
-            fn(); print("PASS", name)
+            fn()
+            print("PASS", name)

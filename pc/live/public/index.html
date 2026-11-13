@@ -62,6 +62,14 @@
   .feed li { display: grid; grid-template-columns: 54px 1fr; gap: 8px; }
   .feed time { color: var(--muted); font-family: var(--mono); font-size: 12px; padding-top: 2px; }
   .feed li.error { color: var(--stop); font-weight: 600; }
+  .hint { padding: 10px 12px; border-radius: 10px; font-weight: 700; font-size: 15px; background: color-mix(in srgb, var(--warn) 16%, var(--panel)); color: var(--ink); border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line)); }
+  .hint.zone { background: color-mix(in srgb, var(--stop) 12%, var(--panel)); border-color: color-mix(in srgb, var(--stop) 45%, var(--line)); }
+  .guardbar { display: grid; gap: 5px; }
+  .gtop { display: flex; justify-content: space-between; font-size: 14px; }
+  .gtrack { position: relative; height: 14px; border-radius: 7px; background: var(--panel-2); border: 1px solid var(--line); }
+  .gfill { position: absolute; left: 0; top: -1px; bottom: -1px; border-radius: 7px; background: var(--data); transition: width .15s; }
+  .gneed { position: absolute; top: -5px; bottom: -5px; width: 3px; border-radius: 2px; background: var(--accent); }
+  .gends { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); font-family: var(--mono); }
   .stopcard { border-color: var(--stop); background: color-mix(in srgb, var(--stop) 8%, var(--panel)); }
   .stopcard h2 { color: var(--stop); }
   .summary { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; text-align: center; }
@@ -73,7 +81,7 @@
 <header>
   <div class="brand">Hair<b>Barbot</b></div>
   <div class="hdr-right">
-    <span class="chip" id="steadyChip"><i></i>Head steady</span>
+    <span class="chip" id="sensChip"><i></i>Sensors</span>
     <span class="chip" id="clipChip"><i></i>Clipper off</span>
     <span class="chip" id="stateChip"><i></i>Connecting</span>
   </div>
@@ -82,13 +90,13 @@
 <main>
   <section class="stage" aria-label="Live 3D view of your head">
     <div id="view"></div>
-    <div class="stage-hint" id="hint">Drag to turn the head</div>
+    <div class="stage-hint" id="dragHint">Drag to turn the head</div>
     <div class="legend"><span>short</span><div class="bar" id="legendBar"></div><span>long</span><span class="uncut"></span><span>not cut yet</span></div>
   </section>
 
   <section class="side">
     <div class="card">
-      <div class="steps" id="steps"><div>Choose</div><div>Fit</div><div>Cut</div><div>Done</div></div>
+      <div class="steps" id="steps"><div>Choose</div><div>Set up</div><div>Cut</div><div>Done</div></div>
     </div>
 
     <!-- choose a haircut -->
@@ -109,20 +117,29 @@
             <circle cx="60" cy="60" r="52" fill="none" stroke="var(--line)" stroke-width="10"/>
             <circle id="ringArc" cx="60" cy="60" r="52" fill="none" stroke="var(--accent)" stroke-width="10" stroke-linecap="round" stroke-dasharray="326.7" stroke-dashoffset="326.7"/>
           </svg>
-          <div class="pct"><div><b class="num" id="pct">0%</b><small id="strokes">0 / 23</small></div></div>
+          <div class="pct"><div><b class="num" id="pct">0%</b><small>of your head</small></div></div>
         </div>
         <div style="display:grid;gap:6px;min-width:0">
-          <div class="big num" id="eta">--</div>
+          <div class="now" id="now">Hold the trigger to cut</div>
           <div class="sub num" id="elapsed"></div>
         </div>
       </div>
-      <div class="now" id="now">Getting started</div>
-      <p class="sub" id="cutMsg"></p>
-      <div class="chips">
-        <span class="chip" id="vacChip"><i></i>Vacuum</span>
-        <span class="chip" id="guardChip"><i></i>Guard</span>
+      <div class="hint" id="hint" hidden></div>
+      <div class="guardbar" aria-label="Guard length">
+        <div class="gtop"><span>Guard length</span><b class="num" id="gval">--</b></div>
+        <div class="gtrack"><div class="gfill" id="gfill"></div><div class="gneed" id="gneed" hidden></div></div>
+        <div class="gends"><span>3 mm</span><span>40 mm</span></div>
       </div>
-      <button class="btn ghost" id="pauseBtn">Pause</button>
+      <div>
+        <div class="sub" style="margin-bottom:6px">Still to do</div>
+        <div class="chips" id="todo"></div>
+      </div>
+      <div class="chips">
+        <span class="chip" id="trigChip"><i></i>Trigger</span>
+        <span class="chip" id="contactChip"><i></i>On the head</span>
+        <span class="chip" id="vacChip"><i></i>Vacuum</span>
+      </div>
+      <button class="btn ghost" id="finishBtn">I'm done</button>
     </div>
 
     <!-- done -->
@@ -135,7 +152,7 @@
     <!-- stopped -->
     <div class="card stopcard" id="stopPanel" hidden>
       <div><h2>Stopped</h2><p class="sub" id="stopWhy"></p></div>
-      <p style="margin:0">The clipper is off and the arm has pulled away from your head. Your barber will check everything before continuing.</p>
+      <p style="margin:0">The clipper is off and the guard has moved to its longest setting. Check what happened, then reset from the operator screen.</p>
     </div>
 
     <div class="card">
