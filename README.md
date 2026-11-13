@@ -36,7 +36,8 @@ pc/controller.py               50 Hz loop: location -> length -> clipper allowed
 pc/orientation.py              quaternion math, calibration (Kabsch), no-cut zones (face, ears)
 pc/styles.py                   hairstyles: length per region + fade (e.g. "Fade 2 cm -> 5 cm")
 pc/serial_link.py              serial protocol to the ESP32 + a full simulator (fake board + fake user)
-pc/tests/test_sim.py           tests, including a full simulated haircut
+pc/vision/head_scalp.py        webcam: find the face, estimate head pose, draw where the scalp is
+pc/tests/                      tests: full simulated haircut (test_sim.py), face/scalp estimate (test_vision.py)
 pc/live/                       Node.js + Socket.io live app: client app + operator dashboard
 docs/budget.xlsx               parts list + budget
 docs/build-book.html           drawings, parts to make, wiring, plan (open in a browser)
@@ -57,6 +58,24 @@ npm run demo          # starts the simulated controller + the live app
 - **http://localhost:3000/operator** — team dashboard: Home guard → Start calibration → Record each spot →
   Finish calibration (or "Skip calibration (sim)"). Then start a haircut from the client app.
 - Tests: `cd pc && python tests/test_sim.py` (about 2 minutes; one test runs a full haircut in real time).
+
+## 1b. Face and scalp detection (webcam)
+
+```bash
+cd pc
+pip install opencv-python numpy
+python vision/head_scalp.py              # webcam; add --mirror to show it like a mirror
+python vision/head_scalp.py --image me.jpg
+```
+Finds the face (OpenCV's YuNet detector, model included in `pc/vision/models`), fits an average 3D face to
+5 landmarks (eyes, nose, mouth corners) to get the head's **yaw / pitch / roll** and distance, then attaches a
+head-sized ellipsoid behind the face. The visible scalp (above the face/ear no-cut line) is drawn on the video,
+colored by the length the chosen style wants there (`--style fade25`), plus the estimated crown.
+Keys: `q` quit, `s` screenshot. If the scalp looks too small or big, try `--head-scale 1.1` or `--fov 70`.
+On a Mac, allow camera access for your terminal (System Settings → Privacy & Security → Camera).
+
+Next step: feed the camera's head yaw into the controller, so the user no longer has to keep facing forward.
+`HeadScalpEstimator.estimate(frame)` returns the pose (`rvec`, `tvec`, `yaw`, `pitch`, `roll`).
 
 ## 2. Electronics
 
