@@ -139,7 +139,7 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
     <div class="main">
       <div class="eyebrow">ME416 · Lab 3 · Robotic haircutter · handheld design</div>
       <h1>HairBarbot build book</h1>
-      <p class="lede">The user holds a Flowbee vacuum clipper. A small motor on the Flowbee moves the comb (the guard) in and out, so the hair length changes automatically depending on where on the head the clipper is. Two orientation sensors tell it where it is. If the clipper is in the wrong spot, or the guard isn't at the right length yet, the clipper turns off immediately.</p>
+      <p class="lede">Fully handheld: the user presses HairBarbot against their head and rolls it over the hair. Two rollers on a motorized carriage touch the scalp and set how long the hair is left. The user picks a hairstyle in the app (for example a fade from 2 cm to 5 cm), and HairBarbot moves the rollers to the right length for whichever part of the head it's on. If it's in the wrong spot, or the rollers aren't at the right length yet, the clipper turns off immediately.</p>
       <nav class="toc" aria-label="Sections">
         <a href="#device">Device</a><a href="#sensing">How it knows where it is</a><a href="#make">Parts to make</a><a href="#wiring">Wiring</a>
         <a href="#software">Software</a><a href="#safety">Safety</a><a href="#product">User experience</a><a href="#plan">5-week plan</a><a href="#next">This week</a>
@@ -147,16 +147,16 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
     </div>
     <div class="tb-cells">
       <div><span>Motors</span><b>1</b></div>
-      <div><span>Sensors</span><b>2 IMU + 1 ToF</b></div>
-      <div><span>Guard range</span><b>3–40 mm</b></div>
+      <div><span>Sensors</span><b>IMU + roller encoder</b></div>
+      <div><span>Hair length</span><b>3–60 mm</b></div>
       <div><span>Controller</span><b>ESP32</b></div>
-      <div><span>Budget</span><b>$740–1,340</b></div>
+      <div><span>Budget</span><b>$720–1,310</b></div>
     </div>
   </header>
 
   <div class="change prose">
     <b>Design change</b>
-    <p>The team replaced the big "halo" robot with a handheld device. It costs about half as much, there's far less to build in 5 weeks, and it solves the real problem for people cutting at home: knowing <em>how</em> to give a good haircut, not holding the clipper. It still meets the brief: the guard changes length based on where on the scalp it is, and the clipper stops immediately in the wrong spot.</p>
+    <p>The team replaced the big "halo" robot with a fully handheld device: no frame and no headband, just rollers on the Flowbee. It costs about half as much, there's far less to build in 5 weeks, and it solves the real problem for people cutting at home: knowing <em>how</em> to give a good haircut. It still meets the brief: the length changes based on where on the scalp it is, and the clipper stops immediately in the wrong spot.</p>
   </div>
 
   <!-- DEVICE -->
@@ -164,14 +164,14 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
     <div class="stack prose">
       <div class="eyebrow">01 · Device</div>
       <h2>What you are building</h2>
-      <p>A printed collar clamps onto the Flowbee's head. On one side it carries a small stepper with a lead screw; on the other, a guide rod. Both drive a printed comb sleeve that slides over the Flowbee hood. The distance from the blade to the sleeve's teeth is the hair length that's left (3–40 mm). An orientation sensor sits on the collar, a distance sensor looks down from the sleeve, and a trigger button sits on the handle.</p>
-      <p class="muted">Dimensions are starting targets. Measure your Flowbee first; the collar and sleeve are sized to its hood.</p>
+      <p>A printed collar clamps onto the Flowbee's head. On one side it carries a small stepper with a lead screw; on the other, a guide rod. Both drive a printed carriage around the Flowbee hood with two small rollers at the bottom. The rollers rest on the scalp, so the distance from the blade to the bottom of the rollers is the hair length that's left (3–60 mm). One roller has a magnet and an encoder to measure how far the device has rolled. An orientation sensor sits on the collar, and a trigger button sits on the handle.</p>
+      <p class="muted">Dimensions are starting targets. Measure your Flowbee first; the collar and carriage are sized to its hood. Roller tires should grip lightly without pulling hair.</p>
     </div>
 
     <figure class="plate">
-      <div class="plate-head"><b>DWG 1 · Handheld unit, side section</b><span class="muted">scale ≈ 2:1 · mm</span></div>
+      <div class="plate-head"><b>DWG 1 · Handheld unit with rollers, side section</b><span class="muted">scale ≈ 2:1 · mm</span></div>
       <div class="plate-body">
-        <svg viewBox="0 0 700 470" role="img" aria-label="Side section of the Flowbee with collar, guard motor, lead screw, comb sleeve, sensors and trigger">
+        <svg viewBox="0 0 700 470" role="img" aria-label="Side section of the Flowbee with collar, motor, lead screw, roller carriage, encoder, IMU and trigger">
           <!-- scalp and hair -->
           <path class="person" d="M40 470 L40 432 Q350 400 660 432 L660 470 Z"/>
           <g class="hair">
@@ -203,19 +203,19 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
           <line x1="214" y1="184" x2="214" y2="336" class="o"/>
           <!-- comb sleeve (moves) -->
           <path class="r" d="M236 238 L444 238 L444 384 L236 384 Z" fill-opacity=".55"/>
-          <g class="rl"><path d="M240 384 l0 10 M256 384 l0 10 M272 384 l0 10 M288 384 l0 10 M304 384 l0 10 M320 384 l0 10 M336 384 l0 10 M352 384 l0 10 M368 384 l0 10 M384 384 l0 10 M400 384 l0 10 M416 384 l0 10 M432 384 l0 10"/></g>
+          <circle cx="250" cy="394" r="12" class="r"/><circle cx="250" cy="394" r="2.5" class="fi"/>
+          <circle cx="430" cy="394" r="12" class="r"/><circle cx="430" cy="394" r="2.5" class="fi"/>
           <!-- links from sleeve to screw nut and to rod bushing -->
           <rect x="444" y="296" width="38" height="14" class="fm"/>
           <rect x="204" y="296" width="32" height="14" class="fm"/>
-          <!-- ToF on sleeve -->
-          <rect x="446" y="352" width="24" height="16" class="s"/>
-          <line x1="458" y1="368" x2="458" y2="412" class="dd"/>
+          <!-- roller encoder (AS5600) next to the right roller's magnet -->
+          <rect x="446" y="386" width="22" height="16" class="s"/>
           <!-- guard dimension -->
-          <line x1="150" y1="318" x2="150" y2="394" class="d"/>
+          <line x1="150" y1="318" x2="150" y2="406" class="d"/>
           <line x1="144" y1="318" x2="262" y2="318" class="dd"/>
-          <line x1="144" y1="394" x2="240" y2="394" class="dd"/>
-          <path class="d" d="M146 326 L150 318 L154 326 M146 386 L150 394 L154 386"/>
-          <text x="62" y="350" class="ts">GUARD</text><text x="62" y="362" class="ts">3–40 mm</text>
+          <line x1="144" y1="406" x2="250" y2="406" class="dd"/>
+          <path class="d" d="M146 326 L150 318 L154 326 M146 398 L150 406 L154 398"/>
+          <text x="62" y="356" class="ts">HAIR LENGTH</text><text x="62" y="368" class="ts">3–60 mm</text>
           <!-- stroke dimension -->
           <line x1="520" y1="238" x2="520" y2="312" class="d"/>
           <path class="d" d="M516 246 L520 238 L524 246 M516 304 L520 312 L524 304"/>
@@ -227,48 +227,45 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
             <line x1="494" y1="234" x2="560" y2="196"/>
             <line x1="452" y1="200" x2="560" y2="230"/>
             <line x1="444" y1="260" x2="560" y2="266"/>
-            <line x1="470" y1="360" x2="560" y2="352"/>
+            <line x1="468" y1="394" x2="560" y2="352"/>
             <line x1="214" y1="220" x2="120" y2="210"/>
             <line x1="236" y1="300" x2="120" y2="260"/>
           </g>
           <text x="564" y="68" class="tr">trigger (2-pole)</text><text x="564" y="80" class="tm">held = allowed to cut</text>
-          <text x="564" y="108">clipper IMU (BNO055)</text><text x="564" y="120" class="tm">Z axis → scalp</text>
+          <text x="564" y="108">device IMU (BNO055)</text><text x="564" y="120" class="tm">Z axis → scalp</text>
           <text x="564" y="148">NEMA 8/11 stepper</text><text x="564" y="160" class="tm">2 mm lead screw</text>
-          <text x="564" y="194">home switch</text><text x="564" y="206" class="tm">at the 40 mm end</text>
+          <text x="564" y="194">home switch</text><text x="564" y="206" class="tm">at the 62 mm end</text>
           <text x="564" y="228" class="ts">printed collar</text><text x="564" y="240" class="tm">clamps the Flowbee</text>
-          <text x="564" y="264" class="tr">comb sleeve (guard)</text><text x="564" y="276" class="tm">slides over the hood</text>
-          <text x="564" y="324" class="ts">37 mm stroke</text>
-          <text x="564" y="350">ToF (VL53L1X)</text><text x="564" y="362" class="tm">"is it on the head?"</text>
+          <text x="564" y="264" class="tr">roller carriage</text><text x="564" y="276" class="tm">moves rollers in / out</text>
+          <text x="564" y="324" class="ts">57 mm stroke</text>
+          <text x="564" y="350">roller encoder (AS5600)</text><text x="564" y="362" class="tm">distance rolled</text>
           <text x="40" y="206">guide rod</text>
           <text x="40" y="256">rod bushing</text>
         </svg>
       </div>
-      <div class="caption">The motor only moves the sleeve; the Flowbee itself is unchanged, so the hair is still pulled up by the vacuum and cut by the Flowbee blade. A printed hard stop on the sleeve keeps the guard from ever going below 3 mm.</div>
+      <div class="caption">The rollers ride on the scalp; the motor moves them relative to the blade. The Flowbee itself is unchanged, so the hair is still pulled up by the vacuum and cut by the Flowbee blade. A printed hard stop keeps the rollers from ever getting closer than 3 mm.</div>
     </figure>
 
     <figure class="plate">
       <div class="plate-head"><b>DWG 2 · Whole system</b><span class="muted">not to scale</span></div>
       <div class="plate-body">
-        <svg viewBox="0 0 700 330" role="img" aria-label="User with headband holding the clipper, cables to the electronics box, laptop and tablet app">
+        <svg viewBox="0 0 700 330" role="img" aria-label="User holding the HairBarbot against their head, cable to the electronics box, laptop and tablet app">
           <!-- user -->
           <path class="person" d="M60 320 Q64 250 130 238 L190 238 Q256 250 260 320 Z"/>
           <rect x="146" y="206" width="28" height="34" class="person"/>
           <ellipse cx="160" cy="150" rx="58" ry="70" class="person"/>
-          <path class="o" d="M104 132 Q160 110 216 132" stroke-width="5" stroke-opacity=".6"/>
-          <rect x="150" y="112" width="20" height="12" class="s"/>
-          <text x="20" y="104" class="ts">headband +</text><text x="20" y="116" class="ts">head IMU</text>
-          <line x1="80" y1="112" x2="150" y2="118" class="lead"/>
+          <text x="20" y="104" class="tm">sits upright,</text><text x="20" y="116" class="tm">facing forward</text>
           <!-- clipper held at back of head -->
           <g transform="rotate(-35 250 120)">
             <rect x="214" y="100" width="70" height="44" rx="6" class="r" fill-opacity=".6"/>
             <rect x="284" y="108" width="70" height="28" rx="8" class="f"/>
             <rect x="320" y="136" width="10" height="10" class="rd"/>
           </g>
-          <text x="300" y="40" class="tr">HairBarbot clipper</text>
+          <text x="300" y="40" class="tr">HairBarbot (rollers on the head)</text>
           <line x1="296" y1="44" x2="270" y2="80" class="lead"/>
           <!-- cables -->
           <path class="w" d="M330 60 Q380 40 430 120"/>
-          <path class="w" d="M160 112 Q220 30 430 140" stroke-dasharray="2 0"/>
+
           <path class="hid" d="M320 70 Q420 0 540 40 L600 40"/>
           <text x="560" y="34" class="tm">hose → vacuum</text>
           <!-- box -->
@@ -293,7 +290,7 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
           <path class="ws" d="M636 176 L636 220"/><text x="642" y="202" class="ts">Wi-Fi</text>
         </svg>
       </div>
-      <div class="caption">Cables from the clipper and headband run to a small box on the table. The laptop runs the controller and the live app; the client watches on a phone or tablet.</div>
+      <div class="caption">One cable runs from the device to a small box on the table, next to the vacuum hose. The laptop runs the controller and the live app; the user watches on a phone or tablet.</div>
     </figure>
   </section>
 
@@ -302,7 +299,7 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
     <div class="stack prose">
       <div class="eyebrow">02 · Sensing</div>
       <h2>How it knows where it is on the head</h2>
-      <p>The head is roughly a sphere, and the Flowbee is always held pointing into it. So the direction the clipper points tells you which spot on the head it's on. The clipper sensor gives that direction; the headband sensor lets you subtract any head movement. A quick calibration (hold the clipper at the top, back, left and right) lines the two up.</p>
+      <p>The head is roughly a sphere, and the device is always pressed into it. So the direction it points tells you which spot on the head it's on: straight down is the top, sideways is the sides. One orientation sensor on the device gives that direction. A quick calibration (hold it at the top, back, left and right) records which way the user is facing. There's no headband, so the user sits upright and keeps facing the same way.</p>
     </div>
     <div class="plates2">
       <figure class="plate">
@@ -325,11 +322,11 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
             </g>
             <path class="d" d="M220 120 A70 70 0 0 0 166 145"/>
             <text x="150" y="122" class="ts">pitch</text>
-            <text x="20" y="40">clipper IMU says:</text>
+            <text x="20" y="40">device IMU says:</text>
             <text x="20" y="54" class="tm">"I'm pointing this way"</text>
-            <text x="20" y="300">headband IMU says:</text>
-            <text x="20" y="314" class="tm">"the head is turned this way"</text>
-            <text x="330" y="80">difference →</text>
+            <text x="20" y="300">calibration says:</text>
+            <text x="20" y="314" class="tm">"the user faces this way"</text>
+            <text x="330" y="80">together →</text>
             <text x="330" y="94" class="ts">yaw (around) +</text>
             <text x="330" y="108" class="ts">pitch (down)</text>
           </svg>
@@ -340,9 +337,8 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
         <div class="tbl"><table>
           <thead><tr><th>Sensor</th><th>Where</th><th>Job</th></tr></thead>
           <tbody>
-            <tr><td><b>BNO055</b></td><td>collar on the Flowbee</td><td>which way the clipper points</td></tr>
-            <tr><td><b>BNO055</b></td><td>headband</td><td>which way the head faces</td></tr>
-            <tr><td><b>VL53L1X</b></td><td>side of the comb sleeve</td><td>is the comb touching the head (counts toward coverage)</td></tr>
+            <tr><td><b>BNO055</b></td><td>collar on the Flowbee</td><td>which way the device points → which part of the head</td></tr>
+            <tr><td><b>AS5600 encoder</b></td><td>on one roller</td><td>how far it has rolled; areas only count as cut while rolling</td></tr>
           </tbody>
         </table></div>
         <div class="tbl"><table>
@@ -354,7 +350,7 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
             <tr><td>Right side, above the ear</td><td class="num">−90°</td><td class="num">65°</td></tr>
           </tbody>
         </table></div>
-        <p class="muted" style="font-size:14px">The math is Kabsch's method: find the rotation that best maps the measured directions onto the known ones. It also corrects for however the headband sits. If the spots disagree by more than 15°, the app asks you to redo them.</p>
+        <p class="muted" style="font-size:14px">The math is Kabsch's method: find the rotation that best maps the measured directions onto the known ones. If the spots disagree by more than 15°, the app asks you to redo them. Tilt (top vs sides) is reliable because it comes from gravity; which side comes from the compass, so recalibrate if the user turns their chair.</p>
       </div>
     </div>
   </section>
@@ -372,13 +368,14 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
         <div class="tbl"><table>
           <thead><tr><th>Part</th><th>Notes</th></tr></thead>
           <tbody>
-            <tr class="crit"><td><b>Comb sleeve (guard)</b></td><td>slides over the hood, Flowbee-style teeth at the bottom. Hardest part: start in week 1, expect 3+ versions.</td></tr>
-            <tr class="crit"><td><b>Hard stop</b></td><td>physical stop so the sleeve can't go below 3 mm, even if the motor misbehaves</td></tr>
+            <tr class="crit"><td><b>Roller carriage</b></td><td>slides along the hood and holds two rollers at the bottom. Hardest part: start in week 1, expect 3+ versions.</td></tr>
+            <tr class="crit"><td><b>Rollers + hubs</b></td><td>~12 mm diameter, bearings in each end, soft tire; one hub holds the encoder magnet</td></tr>
+            <tr class="crit"><td><b>Hard stop</b></td><td>physical stop so the rollers can't get closer than 3 mm, even if the motor misbehaves</td></tr>
             <tr><td>Collar</td><td>2-part clamp around the Flowbee head; motor mount, rod mount, IMU pad</td></tr>
-            <tr><td>Nut bracket + rod bushing</td><td>connect the sleeve to the lead-screw nut and the guide rod</td></tr>
-            <tr><td>Sensor housings</td><td>clipper IMU (Z axis toward the scalp), ToF on the sleeve, head IMU on the band</td></tr>
+            <tr><td>Nut bracket + rod bushing</td><td>connect the carriage to the lead-screw nut and the guide rod</td></tr>
+            <tr><td>Sensor mounts</td><td>IMU on the collar (Z axis toward the scalp); AS5600 board 1–2 mm from the roller magnet</td></tr>
             <tr><td>Handle grip + trigger mount</td><td>sleeve over the Flowbee handle with the trigger under the index finger</td></tr>
-            <tr><td>Home switch bracket</td><td>switch trips 2 mm past the 40 mm end</td></tr>
+            <tr><td>Home switch bracket</td><td>switch trips 2 mm past the 60 mm end</td></tr>
             <tr><td>Electronics box</td><td>ESP32, driver, terminal blocks; E-stop on the lid</td></tr>
           </tbody>
         </table></div>
@@ -394,7 +391,7 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
           </tbody>
         </table></div>
         <h3>Bought parts</h3>
-        <p>Full list with prices in <code>docs/budget.xlsx</code> in the repo. The big items are the Flowbee (~$300), two BNO055s, the guard stepper, the ESP32, two enclosed outlet relays, and mannequin heads.</p>
+        <p>Full list with prices in <code>docs/budget.xlsx</code> in the repo. The big items are the Flowbee (~$300), the stepper with lead screw, a BNO055, AS5600 encoders, the ESP32, two enclosed outlet relays, and mannequin heads.</p>
       </div>
     </div>
   </section>
@@ -404,20 +401,19 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
     <div class="stack prose">
       <div class="eyebrow">04 · Electronics</div>
       <h2>Wiring</h2>
-      <p>One ESP32 runs the guard motor, reads the sensors, and switches the relays. The trigger and the E-stop each have a second contact wired straight into the clipper relay line, so the clipper can't run without the trigger held or with the E-stop pressed, even if the code freezes.</p>
+      <p>One ESP32 runs the roller motor, reads the IMU and the roller encoder, and switches the relays. The trigger and the E-stop each have a second contact wired straight into the clipper relay line, so the clipper can't run without the trigger held or with the E-stop pressed, even if the code freezes.</p>
     </div>
     <figure class="plate">
       <div class="plate-head"><b>DWG 4 · Block wiring diagram</b><span class="muted">pin numbers = ESP32 DevKit GPIO</span></div>
       <div class="plate-body">
-        <svg viewBox="0 0 800 430" role="img" aria-label="Wiring block diagram with ESP32, sensors, driver, relays, trigger and E-stop">
+        <svg viewBox="0 0 800 430" role="img" aria-label="Wiring block diagram with ESP32, IMU, roller encoder, driver, relays, trigger and E-stop">
           <rect x="20" y="40" width="160" height="56" class="boxs"/><text x="32" y="64" class="tb">Laptop</text><text x="32" y="82" class="tm">controller + live app</text>
-          <rect x="20" y="140" width="160" height="50" class="box"/><text x="32" y="162">Clipper BNO055</text><text x="32" y="178" class="tm">bus 0 · 0x28</text>
-          <rect x="20" y="210" width="160" height="50" class="box"/><text x="32" y="232">VL53L1X ToF</text><text x="32" y="248" class="tm">bus 0 · 0x29</text>
-          <rect x="20" y="280" width="160" height="50" class="box"/><text x="32" y="302">Head BNO055</text><text x="32" y="318" class="tm">bus 1 · 0x28 (headband)</text>
+          <rect x="20" y="140" width="160" height="50" class="box"/><text x="32" y="162">BNO055 IMU</text><text x="32" y="178" class="tm">0x28 · on the device</text>
+          <rect x="20" y="210" width="160" height="50" class="box"/><text x="32" y="232">AS5600 encoder</text><text x="32" y="248" class="tm">0x36 · on a roller</text>
           <rect x="300" y="110" width="180" height="170" class="boxs"/><text x="314" y="136" class="tb">ESP32 DevKit</text>
           <text x="314" y="158" class="tm">hairbarbot_handheld.ino</text><text x="314" y="176" class="tm">permit lease · trigger</text><text x="314" y="194" class="tm">E-stop · home · faults</text>
           <rect x="600" y="40" width="170" height="44" class="box"/><text x="612" y="60">TMC2209</text><text x="612" y="75" class="tm">12 V · 8 microsteps</text>
-          <rect x="600" y="100" width="170" height="40" class="box"/><text x="612" y="125">guard stepper</text>
+          <rect x="600" y="100" width="170" height="40" class="box"/><text x="612" y="125">roller carriage stepper</text>
           <rect x="600" y="160" width="170" height="40" class="box"/><text x="612" y="178">home switch</text><text x="612" y="192" class="tm">NO → GND</text>
           <rect x="300" y="330" width="180" height="44" class="boxr"/><text x="312" y="350" class="tr">trigger, 2-pole</text><text x="312" y="365" class="tm">pole 1 → GPIO 32</text>
           <rect x="560" y="240" width="210" height="44" class="boxr"/><text x="572" y="260" class="tr">E-stop, 2 NC contacts</text><text x="572" y="275" class="tm">B → GPIO 14 · A in relay line</text>
@@ -427,7 +423,7 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
           <rect x="670" y="390" width="100" height="32" class="box"/><text x="680" y="410">vacuum</text>
           <path class="w" d="M180 68 L240 68 L240 130 L300 130"/><text x="188" y="62" class="tm">USB serial 50 Hz</text>
           <path class="w" d="M180 165 L300 165"/><path class="w" d="M180 235 L250 235 L250 175 L300 175"/><text x="186" y="158" class="tm">SDA 21 · SCL 22</text>
-          <path class="w" d="M180 305 L270 305 L270 260 L300 260"/><text x="186" y="298" class="tm">SDA 16 · SCL 17</text>
+
           <path class="w" d="M480 140 L570 140 L570 62 L600 62"/><text x="486" y="134" class="tm">STEP 25 DIR 26</text><text x="486" y="154" class="tm">EN 27</text>
           <path class="w" d="M685 84 L685 100"/>
           <path class="w" d="M480 180 L600 180"/><text x="486" y="174" class="tm">GPIO 33</text>
@@ -438,7 +434,7 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
           <path class="w" d="M610 360 L610 390 M720 360 L720 390"/>
         </svg>
       </div>
-      <div class="caption">Clipper relay line: GPIO 18 → trigger pole 2 → E-stop contact A → relay. The head IMU gets its own I²C bus because both BNO055s use address 0x28; that bus also runs slower for the longer headband cable. Never hand-wire 120 V: the relays are enclosed, low-voltage-controlled outlets on a GFCI strip.</div>
+      <div class="caption">Clipper relay line: GPIO 18 → trigger pole 2 → E-stop contact A → relay. Both sensors share one I²C bus (different addresses) and sit on the device, so one cable runs to the box. Never hand-wire 120 V: the relays are enclosed, low-voltage-controlled outlets on a GFCI strip.</div>
     </figure>
   </section>
 
@@ -447,36 +443,36 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
     <div class="stack prose">
       <div class="eyebrow">05 · Code</div>
       <h2>Software you already have</h2>
-      <p>Everything is in the GitHub repo and runs today with no hardware: <code>cd pc/live && npm install && npm run demo</code>. Six tests pass, including a full haircut in real time where the simulated user sweeps the head, lets go of the trigger, and drifts toward the face.</p>
+      <p>Everything is in the GitHub repo and runs today with no hardware: <code>cd pc/live && npm install && npm run demo</code>. Seven tests pass, including a full haircut in real time where the simulated user rolls over the head, lets go of the trigger, and drifts toward the face, plus a check of the 2 cm → 5 cm fade.</p>
     </div>
     <div class="arch">
       <div class="n"><b>live/ (Node.js)</b><span>client app + operator dashboard, Socket.io</span></div>
       <div class="arrow">→</div>
-      <div class="n"><b>controller.py</b><span>50 Hz: location → guard length → clipper allowed? → coverage</span></div>
+      <div class="n"><b>controller.py</b><span>50 Hz: location → roller length → clipper allowed? → coverage</span></div>
       <div class="arrow">→</div>
       <div class="n"><b>orientation.py</b><span>quaternions, calibration, no-cut zones</span></div>
       <div class="arrow">→</div>
       <div class="n"><b>serial_link.py</b><span>protocol to the ESP32 + simulator</span></div>
       <div class="arrow">→</div>
-      <div class="n"><b>hairbarbot_handheld.ino</b><span>guard motor, sensors, relays, interlocks</span></div>
+      <div class="n"><b>hairbarbot_handheld.ino</b><span>roller motor, IMU, encoder, relays, interlocks</span></div>
     </div>
     <div class="cols2">
       <div class="stack">
         <h3>Each loop (50 times a second)</h3>
         <ul class="clean">
-          <li>Read both sensors and work out the spot on the head (yaw, pitch).</li>
-          <li>Look up the hair length the chosen style wants there and send it to the guard motor.</li>
-          <li>Allow the clipper only if the trigger is held, the spot is outside the face/ear zones, and the guard is within ±1.5 mm of the right length.</li>
-          <li>Mark the area under the running clipper as cut, for the coverage map.</li>
+          <li>Read the IMU and work out the spot on the head (yaw, pitch).</li>
+          <li>Look up the hair length the chosen style wants there and move the rollers to it.</li>
+          <li>Allow the clipper only if the trigger is held, the spot is outside the face/ear zones, and the rollers are within ±1.5 mm of the right length.</li>
+          <li>While the rollers are rolling, mark that area as cut for the coverage map.</li>
         </ul>
       </div>
       <div class="stack">
         <h3>First things to change</h3>
         <ul class="clean">
           <li>Add styles from the barber interviews in <code>pc/styles.py</code>.</li>
-          <li>Measure <code>TOF_OFFSET</code> on the real sleeve and set it in <code>pc/config.py</code>.</li>
-          <li>If the clipper IMU isn't mounted Z-toward-scalp, change <code>CLIP_AXIS</code>.</li>
-          <li>Check the guard's steps per mm if your lead screw isn't 2 mm.</li>
+          <li>Measure the roller diameter and set <code>ROLLER_DIAMETER</code> in the firmware.</li>
+          <li>If the IMU isn't mounted Z-toward-scalp, change <code>CLIP_AXIS</code> in <code>pc/config.py</code>.</li>
+          <li>Check <code>STEPS_PER_MM</code> if your lead screw isn't 2 mm.</li>
         </ul>
       </div>
     </div>
@@ -493,13 +489,13 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
       <thead><tr><th>Layer</th><th>Where</th><th>Clipper is off when</th></tr></thead>
       <tbody>
         <tr class="crit"><td><b>Trigger (dead-man)</b></td><td><span class="tag r">hardware</span> <span class="tag">firmware</span></td><td>the user lets go of the trigger</td></tr>
-        <tr class="crit"><td><b>E-stop</b></td><td><span class="tag r">hardware</span> <span class="tag">firmware</span></td><td>E-stop pressed or its wire broken; guard also goes to 40 mm</td></tr>
-        <tr class="crit"><td><b>Wrong spot</b></td><td><span class="tag s">PC 50 Hz</span></td><td>guard isn't within ±1.5 mm of the length this spot needs (e.g. moving faster than the guard can adjust)</td></tr>
+        <tr class="crit"><td><b>E-stop</b></td><td><span class="tag r">hardware</span> <span class="tag">firmware</span></td><td>E-stop pressed or its wire broken; rollers also go to 60 mm</td></tr>
+        <tr class="crit"><td><b>Wrong spot</b></td><td><span class="tag s">PC 50 Hz</span></td><td>rollers aren't within ±1.5 mm of the length this spot needs (e.g. moving faster than they can adjust)</td></tr>
         <tr><td>No-cut zones</td><td><span class="tag s">PC</span></td><td>the clipper is near the face or ears (trim those by hand)</td></tr>
         <tr><td>Permit lease</td><td><span class="tag">firmware</span></td><td>the laptop hasn't re-allowed the clipper in 150 ms (crash, cable pulled)</td></tr>
-        <tr><td>Sensors</td><td><span class="tag s">PC</span></td><td>either orientation sensor stops reporting</td></tr>
+        <tr><td>Sensor</td><td><span class="tag s">PC</span></td><td>the orientation sensor stops reporting</td></tr>
         <tr><td>Unexpected clipper</td><td><span class="tag s">PC</span></td><td>the board reports the clipper on without permission → full stop</td></tr>
-        <tr><td>Mechanical</td><td><span class="tag r">hardware</span></td><td>printed hard stop: the comb can never go below 3 mm</td></tr>
+        <tr><td>Mechanical</td><td><span class="tag r">hardware</span></td><td>printed hard stop: the rollers can never get closer than 3 mm</td></tr>
       </tbody>
     </table></div>
     <p class="callout">Mannequins and balloons only until RASTIC signs off. For the first human tests: team members, longest guard, someone at the E-stop.</p>
@@ -513,9 +509,9 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
       <p>This is the flow the app already supports. Test every step of it in your interviews.</p>
     </div>
     <div class="flow">
-      <div><span class="step">step 1 · 30 s</span><h3>Choose</h3><p>Pick a style (Even 2 cm, buzz, classic, fade, long trim) and adjust five sliders. A 3D head shows the result.</p></div>
-      <div><span class="step">step 2 · 1 min</span><h3>Set up</h3><p>Put on the headband. Touch the clipper to the top, back, left and right of the head to calibrate.</p></div>
-      <div><span class="step">step 3 · ≈10 min</span><h3>Cut</h3><p>Hold the trigger and move over the head. The head map fills in and the app says what's left and when to slow down.</p></div>
+      <div><span class="step">step 1 · 30 s</span><h3>Choose</h3><p>Pick a hairstyle (Fade 2 cm → 5 cm, Even 2 cm, buzz, classic, long trim) and adjust five sliders. A 3D head shows the result.</p></div>
+      <div><span class="step">step 2 · 1 min</span><h3>Set up</h3><p>Sit upright facing forward. Touch the rollers to the top, back, left and right of the head to calibrate.</p></div>
+      <div><span class="step">step 3 · ≈10 min</span><h3>Cut</h3><p>Hold the trigger and roll over the head. The head map fills in and the app says what's left and when to slow down.</p></div>
       <div><span class="step">step 4</span><h3>Finish</h3><p>Ends automatically at 97% coverage. Trim around the ears and neckline by hand.</p></div>
     </div>
     <div class="cols2">
@@ -532,7 +528,7 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
         <h3>Questions for home users</h3>
         <ul class="clean">
           <li>Have you cut your own hair? What went wrong?</li>
-          <li>Is wearing a headband for 10 minutes OK? Would you trust the auto-guard?</li>
+          <li>Would you trust the rollers to set the length automatically? Do rollers feel OK on your head?</li>
           <li>Phone app or buttons on the device?</li>
           <li>What would you pay, compared with ~$30–45 per barber visit?</li>
         </ul>
@@ -551,8 +547,8 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
       <div class="week now">
         <h3>Week 1 <small>Nov 9–15 · order, measure, interview (now)</small></h3>
         <div class="lanes">
-          <div class="lane"><b>Mechanical</b><ul><li>Measure the Flowbee hood</li><li>CAD collar + comb sleeve v1</li></ul></div>
-          <div class="lane"><b>Electronics</b><ul><li>Order parts (Flowbee, BNO055s, stepper, ESP32, relays)</li></ul></div>
+          <div class="lane"><b>Mechanical</b><ul><li>Measure the Flowbee hood</li><li>CAD collar + roller carriage v1</li></ul></div>
+          <div class="lane"><b>Electronics</b><ul><li>Order parts (Flowbee, BNO055, AS5600, stepper, ESP32, relays)</li></ul></div>
           <div class="lane"><b>Software</b><ul><li>Everyone runs <code>npm run demo</code> once</li></ul></div>
           <div class="lane"><b>Research</b><ul><li>BU barber shop interview</li><li>Book more local shops</li></ul></div>
         </div>
@@ -560,8 +556,8 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
       <div class="week">
         <h3>Week 2 <small>Nov 16–22 · first hardware</small></h3>
         <div class="lanes">
-          <div class="lane"><b>Mechanical</b><ul><li>Print collar + sleeve v1–v2</li><li>Sleeve moves smoothly by hand</li></ul></div>
-          <div class="lane"><b>Electronics</b><ul><li>Bench test: guard motor, switches, both IMUs, ToF</li><li>Relays with the clipper unplugged</li></ul></div>
+          <div class="lane"><b>Mechanical</b><ul><li>Print collar + carriage + rollers v1–v2</li><li>Carriage moves smoothly; rollers roll on hair</li></ul></div>
+          <div class="lane"><b>Electronics</b><ul><li>Bench test: motor, switches, IMU, roller encoder</li><li>Relays with the clipper unplugged</li></ul></div>
           <div class="lane"><b>Software</b><ul><li>Add presets from interviews</li></ul></div>
           <div class="lane"><b>Research</b><ul><li>Home-user interviews</li><li>Pick 3–4 presets</li></ul></div>
         </div>
@@ -569,8 +565,8 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
       <div class="week gate">
         <h3>Week 3 <small>Nov 23–29 · integrate (Thanksgiving week)</small></h3>
         <div class="lanes">
-          <div class="lane"><b>Mechanical</b><ul><li>Motor on the collar, hard stop, sensor mounts</li></ul></div>
-          <div class="lane"><b>Electronics</b><ul><li>Main firmware, home the guard</li><li>Measure guard accuracy</li></ul></div>
+          <div class="lane"><b>Mechanical</b><ul><li>Motor on the collar, hard stop, encoder mount</li></ul></div>
+          <div class="lane"><b>Electronics</b><ul><li>Main firmware, home the carriage</li><li>Measure length accuracy</li></ul></div>
           <div class="lane"><b>Software</b><ul><li>Calibration on a mannequin; check location accuracy</li></ul></div>
           <div class="lane"><b>Research</b><ul><li>Update app wording from interviews</li></ul></div>
         </div>
@@ -579,8 +575,8 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
       <div class="week gate">
         <h3>Week 4 <small>Nov 30–Dec 6 · first cuts</small></h3>
         <div class="lanes">
-          <div class="lane"><b>All</b><ul><li>Cut mannequin hair, longest guard first</li><li>Tune guard tolerance and coverage</li></ul></div>
-          <div class="lane"><b>Mechanical</b><ul><li>Sleeve v3 from what jams or snags</li></ul></div>
+          <div class="lane"><b>All</b><ul><li>Cut mannequin hair, longest length first</li><li>Tune length tolerance and coverage</li></ul></div>
+          <div class="lane"><b>Mechanical</b><ul><li>Carriage/rollers v3 from what jams or pulls hair</li></ul></div>
           <div class="lane"><b>Data</b><ul><li>Measure finished lengths vs plan</li></ul></div>
           <div class="lane"><b>Research</b><ul><li>Show results to interviewees</li></ul></div>
         </div>
@@ -605,6 +601,7 @@ ul.clean { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
     <ul class="clean prose">
       <li>Order the long-lead parts, the Flowbee first.</li>
       <li>Measure the Flowbee hood (outside diameter, height, where the spacers clip on) and share it with the CAD lead.</li>
+      <li>Pick roller size and tire material: test a few on a mannequin so they roll without pulling hair.</li>
       <li>Run the barber interview and write up the guard numbers they use per region.</li>
       <li>Tell Sebesta about the design change in the weekly update and confirm the handheld version meets the brief.</li>
       <li>Assign names to the handheld tasks on the GitHub board (the old "halo" tasks are closed).</li>

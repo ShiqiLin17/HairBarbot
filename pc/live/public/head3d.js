@@ -1,4 +1,4 @@
-// Live 3D head view shared by the client app and the operator dashboard (handheld HairBarbot).
+// Live 3D head view shared by the client app and the operator dashboard (handheld HairBarbot with rollers).
 // Head frame (same as the Python code): x forward (nose), y to the client's LEFT, z up.
 // Three.js frame: X = client's left, Y = up, Z = toward the face. 1 three.js unit = 100 mm.
 import * as THREE from "three";
@@ -40,7 +40,7 @@ function gridLookup(grid, yaw, pitch, smooth) {
   return w ? sum / w : null;
 }
 
-export function createHeadView(container, { follow = true, gmin = 3, gmax = 40 } = {}) {
+export function createHeadView(container, { follow = true, gmin = 3, gmax = 60 } = {}) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   container.appendChild(renderer.domElement);
@@ -90,18 +90,21 @@ export function createHeadView(container, { follow = true, gmin = 3, gmax = 40 }
   const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.55, 1.4, 32), skinMat);
   neck.position.set(0, -1.15, -0.1);
   scene.add(neck);
-  // headband with its sensor
-  const band = new THREE.Mesh(new THREE.TorusGeometry(1, 0.025, 8, 80), new THREE.MeshStandardMaterial({ color: 0x3a4652, roughness: 0.6 }));
-  band.scale.set(HEAD.b / 100 + 0.02, HEAD.a / 100 + 0.02, 1);
-  band.rotation.x = Math.PI / 2;
-  band.position.y = 0.42;
-  scene.add(band);
 
-  // ---- the handheld clipper: comb (guard), Flowbee head, handle with hose
+  // ---- the handheld device: two rollers on the moving carriage, Flowbee head, handle with hose
   const clipper = new THREE.Group();
   const bodyMat = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.5 });
   const accentMat = new THREE.MeshStandardMaterial({ color: 0xffb020, roughness: 0.35, emissive: 0x000000 });
-  const comb = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.04, 32), accentMat);
+  const comb = new THREE.Group();   // rollers + carriage plate
+  [-0.15, 0.15].forEach((x) => {
+    const roller = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.09, 20), accentMat);
+    roller.rotation.x = Math.PI / 2;
+    roller.position.set(x, 0.06, 0);
+    comb.add(roller);
+  });
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.03, 0.16), accentMat);
+  plate.position.y = 0.13;
+  comb.add(plate);
   const headPart = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.22, 0.32, 32), bodyMat);
   const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.235, 0.235, 0.07, 32), new THREE.MeshStandardMaterial({ color: 0x2b6f9f, roughness: 0.4 }));
   const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.5, 20), bodyMat);
@@ -114,7 +117,7 @@ export function createHeadView(container, { follow = true, gmin = 3, gmax = 40 }
   clipper.visible = false;
   function layoutClipper(guardMm) {
     const g = Math.max(0.03, guardMm / 100);   // comb sits `guard` mm out from the blade
-    comb.position.y = 0.02;
+    comb.position.y = 0.0;
     glow.position.y = 0.0;
     headPart.position.y = g + 0.16;
     collar.position.y = g + 0.2;
@@ -212,6 +215,6 @@ export function createHeadView(container, { follow = true, gmin = 3, gmax = 40 }
   return api;
 }
 
-export function lengthColor(v, gmin = 3, gmax = 40) {
+export function lengthColor(v, gmin = 3, gmax = 60) {
   return "#" + HAIR_SHORT.clone().lerp(HAIR_LONG, Math.pow((v - gmin) / (gmax - gmin), 0.7)).getHexString();
 }

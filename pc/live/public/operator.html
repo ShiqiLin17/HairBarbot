@@ -95,7 +95,7 @@
     </div>
     <div class="card">
       <h2>Sensor calibration <span id="calTxt"></span></h2>
-      <p class="small">Headband on. For each spot, hold the clipper against the head pointing straight at it, keep still, and press Record. 3 or more spots.</p>
+      <p class="small">User sits upright facing forward. For each spot, press the rollers against the head pointing straight at it, keep still, and press Record. 3 or more spots.</p>
       <div class="btns"><button class="b" id="calStart">Start calibration</button></div>
       <ul class="pts" id="pts"></ul>
       <div class="btns"><button class="b primary" id="calFin">Finish calibration</button></div>
@@ -114,9 +114,9 @@
       <div class="legend"><span><i style="background:var(--data)"></i>actual guard</span><span><i style="background:var(--accent)"></i>needed here</span><span><i style="background:color-mix(in srgb, var(--accent) 25%, transparent);height:8px"></i>±1.5 mm allowed</span></div>
     </div>
     <div class="card">
-      <h2>Contact · distance to scalp</h2>
+      <h2>Roller · speed on the head</h2>
       <canvas class="chart" id="tofChart"></canvas>
-      <div class="legend"><span><i style="background:var(--data)"></i>ToF reading (mm)</span><span><i style="background:var(--muted)"></i>"on the head" threshold</span></div>
+      <div class="legend"><span><i style="background:var(--data)"></i>roller speed (mm/s)</span><span><i style="background:var(--muted)"></i>"rolling" threshold</span></div>
     </div>
   </div>
 

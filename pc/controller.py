@@ -8,11 +8,11 @@ States
   any -> STOPPED (app STOP, E-stop, board fault, lost connection) -> reset -> READY / IDLE
 
 Every loop while CUTTING:
-  1. read both orientation sensors -> where on the head the clipper is (yaw, pitch)
+  1. read the orientation sensor -> where on the head the device is (yaw, pitch)
   2. look up the hair length the chosen style wants there -> send that guard length to the board
   3. allow the clipper ONLY if: trigger held, sensors OK, not near the face/ears, and the guard
      is already at the right length for this spot ("wrong spot -> clipper off immediately")
-  4. mark the area under the clipper as cut -> coverage map for the app
+  4. while the rollers are rolling, mark the area under the clipper as cut -> coverage map for the app
 """
 import collections
 import math
@@ -34,7 +34,7 @@ HINTS = {
     "trigger": "Hold the trigger to cut.",
     "zone": "Too close to the face or ears. Trim there by hand.",
     "guard": "Slow down: the guard is adjusting.",
-    "sensors": "Can't tell where the clipper is. Check the sensors.",
+    "sensors": "Can't tell where the device is. Check the orientation sensor.",
     "estop": "E-stop is pressed.",
 }
 
@@ -60,7 +60,10 @@ class Controller:
         self.loc = None                     # (yaw, pitch) or None
         self.target = config.GUARD_MAX
         self.block = None                   # why the clipper is not allowed right now
-        self.contact = False
+        self.rolling = False
+        self.speed = 0.0                    # roller speed, mm/s (smoothed)
+        self.cut_distance = 0.0             # mm rolled with the clipper on, this session
+        self._last_rolled = None
         self.started_at = None
         self.finished_at = None
         self.events = collections.deque(maxlen=60)
@@ -134,8 +137,8 @@ class Controller:
             self.link.sim_place(yaw, pitch)
             time.sleep(0.4)                         # let a few readings arrive at the new spot
         st = self.link.get_status()
-        if not (st["clip_imu"] and st["head_imu"]):
-            raise ControllerError("Both orientation sensors must be working to calibrate.")
+        if not st["imu_ok"]:
+            raise ControllerError("The orientation sensor must be working to calibrate.")
         if len(self.recent_v) < 5:
             raise ControllerError("No sensor readings yet. Wait a second and try again.")
         v = np.mean(list(self.recent_v)[-10:], axis=0)
@@ -173,6 +176,9 @@ class Controller:
         self.fade_to = None if fade_to in (None, "", False) else float(fade_to)
         self.style_key = style if style in STYLES else None
         self._dwell[:] = 0.0
+        self.cut_distance = 0.0
+        self.link.zero_rolled()
+        self._last_rolled = None
         self.started_at, self.finished_at = time.time(), None
         self.link.vacuum(True)
         self.state = "CUTTING"
@@ -234,11 +240,20 @@ class Controller:
 
     def _tick(self, now, dt):
         st = self.link.get_status()
-        imus = st["clip_imu"] and st["head_imu"]
-        if imus:
-            self.recent_v.append(measured_vector(st["qc"], st["qh"]))
-        self.loc = locate(st["qc"], st["qh"], self.M) if (imus and self.M is not None) else None
-        self.contact = st["tof_ok"] and 0 < st["tof"] < st["guard"] + config.TOF_OFFSET + config.CONTACT_MARGIN
+        imu_ok = st["imu_ok"]
+        if imu_ok:
+            self.recent_v.append(measured_vector(st["q"]))
+        self.loc = locate(st["q"], self.M) if (imu_ok and self.M is not None) else None
+        # roller: speed and "is it rolling on the head?"
+        if st["enc_ok"] and dt > 0:
+            if self._last_rolled is not None:
+                d = st["rolled"] - self._last_rolled
+                if abs(d) < 200:                       # ignore a jump (e.g. after Z)
+                    self.speed = 0.8 * self.speed + 0.2 * (d / dt)
+                    if st["clipper"]:
+                        self.cut_distance += abs(d)
+            self._last_rolled = st["rolled"]
+        self.rolling = st["enc_ok"] and abs(self.speed) > config.ROLLING_MIN_SPEED
 
         cutting = self.state == "CUTTING"
         if cutting and self.loc:
@@ -286,7 +301,7 @@ class Controller:
                 self._last_zone_log = now
             if st["clipper"] and self.loc:
                 self.message = f"Cutting the {region_name(*self.loc)} at {st['guard']:.0f} mm."
-                if self.contact or not st["tof_ok"]:
+                if self.rolling or not st["enc_ok"]:
                     n = direction(*self.loc)
                     near = self._cell_dir @ n > math.cos(math.radians(config.COVER_RADIUS_DEG))
                     self._dwell[near] += dt
@@ -330,7 +345,8 @@ class Controller:
         loc = self.loc
         live = {"need_guard": round(self.target, 1) if self.state == "CUTTING" and loc else None,
                 "guard_err": round(st["guard"] - self.target, 2), "block": self.block,
-                "hint": HINTS.get(self.block), "contact": self.contact, "elapsed": None}
+                "hint": HINTS.get(self.block), "rolling": self.rolling, "speed": round(self.speed, 1),
+                "cut_distance": round(self.cut_distance), "elapsed": None}
         if self.started_at:
             live["elapsed"] = round((self.finished_at or time.time()) - self.started_at, 1)
         return {

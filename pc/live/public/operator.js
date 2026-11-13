@@ -59,8 +59,8 @@ function drawChart(canvas, series, { min, max, band, limit }) {
   });
 }
 function charts() {
-  drawChart($("#guardChart"), [{ key: "need", color: css("--accent") }, { key: "guard", color: css("--data") }], { min: 0, max: 40, band: { key: "need", w: 1.5 } });
-  drawChart($("#tofChart"), [{ key: "tof", color: css("--data") }, { key: "contactLine", color: css("--muted") }], { min: 0, max: 120 });
+  drawChart($("#guardChart"), [{ key: "need", color: css("--accent") }, { key: "guard", color: css("--data") }], { min: 0, max: 60, band: { key: "need", w: 1.5 } });
+  drawChart($("#tofChart"), [{ key: "speed", color: css("--data") }, { key: "minLine", color: css("--muted") }], { min: 0, max: 80 });
   requestAnimationFrame(charts);
 }
 requestAnimationFrame(charts);
@@ -107,15 +107,17 @@ function render(s) {
     <span>Guard error</span><span>${live.need_guard != null ? live.guard_err.toFixed(2) + " mm" : "--"}</span>`;
 
   const now = performance.now() / 1000;
-  hist.push({ t: now, guard: m.guard, need: live.need_guard, tof: m.tof_ok && m.tof > 0 ? m.tof : null, contactLine: m.guard + 25 + 12 });
+  hist.push({ t: now, guard: m.guard, need: live.need_guard, speed: m.enc_ok ? Math.abs(live.speed || 0) : null, minLine: 5 });
   while (hist.length && hist[0].t < now - 32) hist.shift();
 
   // sensors
   $("#sensors").innerHTML = `
-    <span>Clipper IMU</span><span>${yes(m.clip_imu, "ok", "MISSING")}</span>
-    <span>Head IMU</span><span>${yes(m.head_imu, "ok", "MISSING")}</span>
-    <span>Distance (ToF)</span><span>${m.tof_ok ? m.tof + " mm" : '<span class="bad">not ok</span>'}</span>
-    <span>On the head</span><span>${live.contact ? "yes" : "no"}</span>
+    <span>Orientation IMU</span><span>${yes(m.imu_ok, "ok", "MISSING")}</span>
+    <span>Roller encoder</span><span>${yes(m.enc_ok, "ok", "MISSING")}</span>
+    <span>Rolled (counter)</span><span>${m.rolled.toFixed(0)} mm</span>
+    <span>Roller speed</span><span>${live.speed != null ? Math.abs(live.speed).toFixed(0) + " mm/s" : "--"}</span>
+    <span>Rolling on head</span><span>${live.rolling ? "yes" : "no"}</span>
+    <span>Cut distance</span><span>${live.cut_distance != null ? (live.cut_distance / 10).toFixed(0) + " cm" : "--"}</span>
     <span>Trigger</span><span>${m.trigger ? "held" : "released"}</span>
     <span>Permit lease</span><span>${m.permit ? "active" : "off"}</span>
     <span>Clipper</span><span>${m.clipper ? '<span class="bad">ON</span>' : "off"}</span>

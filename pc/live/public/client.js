@@ -4,12 +4,12 @@ import { createHeadView, lengthColor } from "./head3d.js";
 const $ = (s) => document.querySelector(s);
 const REGIONS = ["top", "front", "sides", "back", "nape"];
 const socket = io();
-let styles = {}, gmin = 3, gmax = 40, current = "even20", state = null;
+let styles = {}, gmin = 3, gmax = 60, current = "fade25", state = null;
 let showPick = true, prevState = null;
 let previewKey = "", previewTimer = null;
 
 const view = createHeadView($("#view"));
-$("#legendBar").style.background = `linear-gradient(90deg, ${lengthColor(3)}, ${lengthColor(40)})`;
+$("#legendBar").style.background = `linear-gradient(90deg, ${lengthColor(3)}, ${lengthColor(60)})`;
 
 // ---------------------------------------------------------------- helpers
 function toast(text) {
@@ -99,7 +99,7 @@ function render(s) {
   const stepIdx = done ? 3 : cutting || stopped ? 2 : ["NOT_HOMED", "HOMING", "IDLE", "CALIBRATING"].includes(st) ? 1 : 0;
   [...$("#steps").children].forEach((d, i) => { d.className = i < stepIdx ? "done" : i === stepIdx ? "cur" : ""; });
 
-  const sensorsOk = m.clip_imu && m.head_imu;
+  const sensorsOk = m.imu_ok && m.enc_ok;
   chip($("#sensChip"), sensorsOk ? "on" : "hot", sensorsOk ? "Sensors OK" : "Check sensors");
   chip($("#clipChip"), m.clipper ? "hot" : "", m.clipper ? "Clipper on" : "Clipper off");
   const label = { NOT_HOMED: "Setting up", HOMING: "Setting up", IDLE: "Setting up", CALIBRATING: "Calibrating", READY: "Ready",
@@ -108,15 +108,15 @@ function render(s) {
 
   const canStart = (st === "READY" || st === "DONE") && !s.busy;
   $("#startBtn").disabled = !canStart;
-  $("#waitNote").textContent = canStart ? "Put on the headband, then hold the clipper against your head and squeeze the trigger." :
-    st === "CALIBRATING" ? "Calibrating: hold the clipper at each spot the operator asks for." :
+  $("#waitNote").textContent = canStart ? "Sit upright facing forward, press the rollers against your head and squeeze the trigger." :
+    st === "CALIBRATING" ? "Calibrating: hold the device at each spot the operator asks for." :
     "Getting HairBarbot ready. You can choose your haircut now.";
 
   if (cutting) {
     const pct = Math.round(cov.pct * 100);
     $("#pct").textContent = pct + "%";
     $("#ringArc").style.strokeDashoffset = 326.7 * (1 - cov.pct);
-    $("#now").textContent = m.clipper && loc ? `Cutting the ${loc.region}` : loc ? `On the ${loc.region}` : "Bring the clipper to your head";
+    $("#now").textContent = m.clipper && loc ? `Cutting the ${loc.region}` : loc ? `On the ${loc.region}` : "Bring the rollers to your head";
     $("#elapsed").textContent = live.elapsed != null ? `${fmtTime(live.elapsed)} so far` : "";
     const hint = $("#hint");
     hint.hidden = !live.hint || live.block === "trigger";
@@ -128,7 +128,7 @@ function render(s) {
     if (live.need_guard != null) $("#gneed").style.left = `calc(${pctOf(live.need_guard)}% - 1px)`;
     $("#todo").innerHTML = cov.todo.length ? cov.todo.map((r) => `<span class="chip warn"><i></i>${r}</span>`).join("") : `<span class="chip on"><i></i>Everything covered</span>`;
     chip($("#trigChip"), m.trigger ? "on" : "", m.trigger ? "Trigger held" : "Trigger released");
-    chip($("#contactChip"), live.contact ? "on" : "", live.contact ? "On the head" : "Not touching");
+    chip($("#contactChip"), live.rolling ? "on" : "", live.rolling ? `Rolling · ${(live.cut_distance / 10).toFixed(0)} cm cut` : "Not rolling");
     chip($("#vacChip"), m.vacuum ? "on" : "", m.vacuum ? "Vacuum on" : "Vacuum off");
   }
   if (done) {

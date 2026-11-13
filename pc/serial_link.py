@@ -13,10 +13,9 @@ STATE_NAMES = {0: "NOT_HOMED", 1: "HOMING", 2: "READY", 4: "FAULT"}
 
 
 def _empty_status():
-    return {"qc": (1.0, 0.0, 0.0, 0.0), "qh": (1.0, 0.0, 0.0, 0.0), "tof": 0, "guard": config.GUARD_MAX,
-            "target": config.GUARD_MAX, "state": 0, "state_name": "NOT_HOMED", "homed": False, "clipper": False,
-            "vacuum": False, "estop_ok": True, "tof_ok": False, "clip_imu": False, "head_imu": False,
-            "trigger": False, "permit": False, "age": 99.0}
+    return {"q": (1.0, 0.0, 0.0, 0.0), "rolled": 0.0, "guard": config.GUARD_MAX, "target": config.GUARD_MAX,
+            "state": 0, "state_name": "NOT_HOMED", "homed": False, "clipper": False, "vacuum": False,
+            "estop_ok": True, "enc_ok": False, "imu_ok": False, "trigger": False, "permit": False, "age": 99.0}
 
 
 class LinkBase:
@@ -89,15 +88,14 @@ class SerialLink(LinkBase):
     def _parse(self, line):
         if line.startswith("ST "):
             p = line.split()
-            if len(p) != 14:
+            if len(p) != 10:
                 return
             try:
-                f = int(p[13])
-                self._set_status(qc=tuple(float(x) for x in p[1:5]), qh=tuple(float(x) for x in p[5:9]),
-                                 tof=int(p[9]), guard=float(p[10]), target=float(p[11]), state=int(p[12]),
-                                 homed=bool(f & 1), clipper=bool(f & 2), vacuum=bool(f & 4), estop_ok=bool(f & 8),
-                                 tof_ok=bool(f & 16), clip_imu=bool(f & 32), head_imu=bool(f & 64),
-                                 trigger=bool(f & 128), permit=bool(f & 256))
+                f = int(p[9])
+                self._set_status(q=tuple(float(x) for x in p[1:5]), rolled=float(p[5]), guard=float(p[6]),
+                                 target=float(p[7]), state=int(p[8]), homed=bool(f & 1), clipper=bool(f & 2),
+                                 vacuum=bool(f & 4), estop_ok=bool(f & 8), enc_ok=bool(f & 16), imu_ok=bool(f & 32),
+                                 trigger=bool(f & 64), permit=bool(f & 128))
             except ValueError:
                 pass
         elif line == "DONE":
@@ -132,6 +130,9 @@ class SerialLink(LinkBase):
 
     def vacuum(self, on):
         self._write("V 1" if on else "V 0")
+
+    def zero_rolled(self):
+        self._write("Z")
 
     def stop(self):
         self._write("S")
@@ -178,17 +179,17 @@ def _sweep_path():
 
 class SimLink(LinkBase):
     """Fake board + fake user for testing with no hardware.
-    It generates real quaternions from a made-up sensor mounting, so the calibration math is exercised."""
-    GUARD_SPEED = 12.0   # mm/s, same as firmware
+    It generates real quaternions for a user facing some random direction in the room,
+    so the calibration math is exercised."""
+    GUARD_SPEED = 15.0   # mm/s, same as firmware
     HAND_SPEED = 30.0    # deg/s along the head
 
     def __init__(self, speedup=1.0, seed=1):
         super().__init__()
         rnd = random.Random(seed)
         self.speedup = speedup
-        # made-up mounting: head sensor tilted on the headband, headband turned in the room
-        self.R_head = _axis_angle([rnd.uniform(-1, 1), rnd.uniform(-1, 1), 1], rnd.uniform(20, 160))
-        self.M_true = _axis_angle([rnd.uniform(-1, 1), 1, rnd.uniform(-1, 1)], rnd.uniform(10, 60))  # head-sensor -> head
+        # the user faces a random direction in the room (head upright): M_true = room axes -> head axes
+        self.M_true = _axis_angle([0, 0, 1], rnd.uniform(-180, 180)) @ _axis_angle([1, 0, 0], rnd.uniform(-5, 5))
         self.state = 0
         self.homed = False
         self.guard_mm = config.GUARD_MAX
@@ -202,7 +203,7 @@ class SimLink(LinkBase):
         self.path = _sweep_path()
         self.path_i = 0.0
         self.roll = 0.0
-        self.on_head = True
+        self.rolled = 0.0
         self._home_until = None
         threading.Thread(target=self._run, daemon=True).start()
 
@@ -228,12 +229,11 @@ class SimLink(LinkBase):
     _face_until = 0.0
 
     # --- physics
-    def _quats(self):
-        n_head = direction(*self.hand)
-        n_world = self.R_head @ (self.M_true.T @ n_head)
+    def _quat(self):
+        n_world = self.M_true.T @ direction(*self.hand)
         a = np.array(config.CLIP_AXIS, float)
-        R_clip = _axis_angle(-n_world, self.roll) @ _rot_from_to(a, -n_world)
-        return matrix_to_quat(R_clip), matrix_to_quat(self.R_head)
+        R = _axis_angle(-n_world, self.roll) @ _rot_from_to(a, -n_world)
+        return matrix_to_quat(R)
 
     def _run(self):
         last = time.time()
@@ -265,13 +265,15 @@ class SimLink(LinkBase):
                     i0 = int(self.path_i)
                     i1 = min(i0 + 1, len(self.path) - 1)
                     (y0, p0), (y1, p1) = self.path[i0], self.path[i1]
+                    old = self.hand
                     self.hand = (y0 + (y1 - y0) * f, p0 + (p1 - p0) * f)
+                    # roller: arc length on a ~100 mm head
+                    ang = math.degrees(math.acos(max(-1.0, min(1.0, float(direction(*old) @ direction(*self.hand))))))
+                    self.rolled += math.radians(ang) * 100.0
             self.clip = self.state == 2 and self.trigger and now < self.permit_until
-            qc, qh = self._quats()
-            tof = int(self.guard_mm + config.TOF_OFFSET + random.uniform(-2, 2)) if self.on_head else 0
-            self._set_status(qc=qc, qh=qh, tof=tof, guard=round(self.guard_mm, 2), target=round(self.target_mm, 2),
-                             state=self.state, homed=self.homed, clipper=self.clip, vacuum=self.vac, estop_ok=True,
-                             tof_ok=True, clip_imu=True, head_imu=True, trigger=self.trigger,
+            self._set_status(q=self._quat(), rolled=round(self.rolled, 1), guard=round(self.guard_mm, 2),
+                             target=round(self.target_mm, 2), state=self.state, homed=self.homed, clipper=self.clip,
+                             vacuum=self.vac, estop_ok=True, enc_ok=True, imu_ok=True, trigger=self.trigger,
                              permit=now < self.permit_until)
 
     # --- commands (same as SerialLink)
@@ -296,6 +298,9 @@ class SimLink(LinkBase):
 
     def vacuum(self, on):
         self.vac = on and self.state != 4
+
+    def zero_rolled(self):
+        self.rolled = 0.0
 
     def stop(self):
         if self.state != 4:

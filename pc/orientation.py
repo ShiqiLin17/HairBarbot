@@ -1,20 +1,23 @@
-"""Where on the head is the clipper? Worked out from two orientation sensors (BNO055).
+"""Where on the head is the device? Worked out from ONE orientation sensor (BNO055) on the device.
 
 Idea: the head is roughly a sphere, and the Flowbee is always held pointing INTO the scalp.
-So the direction the clipper points (reversed) is the direction from the head center to the
+So the direction the device points (reversed) is the direction from the head center to the
 spot being cut. If we know that direction in the HEAD's frame, we know the spot:
   yaw   = which way around the head (0 = face, +90 = client's left, 180 = back)
   pitch = how far down from the crown (0 = crown, 90 = ear level)
 
-  n_world = -R_clip @ CLIP_AXIS      direction from head center to the spot, in world axes
-  v       =  R_head.T @ n_world      same direction in the headband sensor's axes
-  n_head  =  M @ v                   same direction in head axes (M comes from calibration)
+  n_world = -R_device @ CLIP_AXIS    direction from head center to the spot, in world (room) axes
+  n_head  =  M @ n_world             same direction in head axes (M comes from calibration)
+
+No headband: we assume the head stays upright and facing the same way as during calibration.
+The BNO055 gives orientation relative to gravity + magnetic north, so tilt (top vs sides) is solid;
+"which side" relies on the compass heading, so keep the head still and away from big metal objects.
 
 Head frame: x forward (nose), y to the client's LEFT, z up.
 
-Calibration: the user holds the clipper at 3-4 known spots (top, back, left, right).
+Calibration: the user holds the device at 3-4 known spots (top, back, left, right).
 Each gives a pair (v measured, n_head known). M is the rotation that best maps one set
-onto the other (Kabsch / Wahba). That also absorbs however the headband sensor is mounted.
+onto the other (Kabsch / Wahba). It captures which way the user is facing in the room.
 """
 import math
 
@@ -63,17 +66,19 @@ def yaw_pitch(n):
     return math.degrees(math.atan2(n[1], n[0])), math.degrees(math.acos(max(-1.0, min(1.0, n[2]))))
 
 
-def measured_vector(q_clip, q_head):
-    """Direction to the spot being cut, in the headband sensor's axes (before calibration)."""
+def measured_vector(q_device, q_head=None):
+    """Direction from the head center to the spot being cut, in room axes (before calibration).
+    q_head is optional (for a future headband sensor); without it the head is assumed still."""
     a = np.array(config.CLIP_AXIS, dtype=float)
-    n_world = -quat_to_matrix(q_clip) @ a
-    v = quat_to_matrix(q_head).T @ n_world
+    v = -quat_to_matrix(q_device) @ a
+    if q_head is not None:
+        v = quat_to_matrix(q_head).T @ v
     return v / (np.linalg.norm(v) or 1.0)
 
 
-def locate(q_clip, q_head, M):
+def locate(q_device, M, q_head=None):
     """-> (yaw, pitch) of the spot being cut, in degrees."""
-    return yaw_pitch(M @ measured_vector(q_clip, q_head))
+    return yaw_pitch(M @ measured_vector(q_device, q_head))
 
 
 def calibrate(pairs):

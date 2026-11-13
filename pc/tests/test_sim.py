@@ -39,7 +39,7 @@ def test_quaternion_roundtrip():
 
 
 def test_calibration_math_recovers_mounting():
-    M_true = _axis_angle([0.3, 1, -0.2], 37)
+    M_true = _axis_angle([0, 0, 1], 123) @ _axis_angle([1, 0, 0], 3)
     pairs = [(M_true.T @ direction(y, p), direction(y, p)) for _, y, p in config.CALIB_POSES]
     M, err = calibrate(pairs)
     assert np.allclose(M, M_true, atol=1e-6) and err < 1e-3
@@ -106,6 +106,7 @@ def test_full_session_guard_follows_and_safety():
     assert s["state"] == "DONE", (s["state"], s["message"], s["coverage"]["pct"])
     assert s["coverage"]["pct"] >= config.COVER_DONE
     assert checked > 50 and face_tested and trigger_tested
+    assert s["live"]["cut_distance"] > 1000, s["live"]       # the roller measured real distance
     time.sleep(0.2)
     assert not ctl.link.get_status()["clipper"]
 
@@ -119,6 +120,13 @@ def test_stop_and_reset():
     s = wait(c, lambda s: s["state"] == "STOPPED" and not s["machine"]["clipper"], 3, "stopped")
     r = c.post("/api/reset")
     assert r.status_code == 200 and r.get_json()["status"]["state"] == "READY"
+
+
+def test_fade_2_to_5_cm_style():
+    st = STYLES["fade25"]
+    assert guard_length(0, 0, st["lengths"], st["fade_to"]) == 50                    # crown: 5 cm
+    assert abs(guard_length(180, 104, st["lengths"], st["fade_to"]) - 20) < 0.5     # bottom of the back: 2 cm
+    assert abs(guard_length(90, 74, st["lengths"], st["fade_to"]) - 20) < 2.0       # just above the ear: ~2 cm
 
 
 def test_start_refused_before_calibration():

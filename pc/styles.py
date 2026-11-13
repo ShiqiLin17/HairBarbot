@@ -22,6 +22,12 @@ STYLES = {
         "lengths": {"top": 20, "front": 20, "sides": 20, "back": 20, "nape": 20},
         "fade_to": None,
     },
+    "fade25": {
+        "name": "Fade 2 cm → 5 cm",
+        "desc": "5 cm on top, fading down to 2 cm at the neck and sides.",
+        "lengths": {"top": 50, "front": 50, "sides": 50, "back": 50, "nape": 20},
+        "fade_to": 20,
+    },
     "buzz": {
         "name": "Buzz cut",
         "desc": "Same length everywhere. Simplest and fastest.",

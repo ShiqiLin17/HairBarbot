@@ -8,18 +8,19 @@ SERIAL_PORT = "/dev/ttyUSB0"   # Windows: "COM3", Mac: "/dev/cu.usbserial-XXXX" 
 BAUD = 115200
 
 # ---- Guard (comb length = hair length left after cutting)
-GUARD_MIN, GUARD_MAX = 3.0, 40.0
+GUARD_MIN, GUARD_MAX = 3.0, 60.0
 
 # ---- Sensors
 # Direction the clipper points INTO the scalp, in the clipper IMU's own axes.
 # Mount the clipper BNO055 so its Z axis points from the clipper toward the scalp -> (0, 0, 1).
 # If you mount it differently, change this (e.g. (1, 0, 0) if its X axis points at the scalp).
 CLIP_AXIS = (0.0, 0.0, 1.0)
-# Distance from the ToF sensor to the comb tip when the guard is at 0 mm (measure on the real part).
-TOF_OFFSET = 25.0
-CONTACT_MARGIN = 12.0          # comb counts as "on the head" if ToF < guard + offset + margin
+# Roller encoder: the device counts as "rolling on the head" above this speed (mm/s).
+# Only rolled areas count toward coverage.
+ROLLING_MIN_SPEED = 5.0
 
-# ---- Calibration: where the user holds the clipper for each pose (yaw, pitch on the head)
+# ---- Calibration: where the user holds the device for each pose (yaw, pitch on the head).
+# There's no headband, so this assumes the head stays upright and facing the same way during the cut.
 # yaw 0 = face, +90 = client's LEFT, 180 = back.  pitch 0 = crown, 90 = ear level.
 CALIB_POSES = [
     ("Top of the head", 0.0, 0.0),
