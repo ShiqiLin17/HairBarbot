@@ -16,7 +16,12 @@ rollers aren't at the right length yet, the clipper turns off immediately.
 - **One orientation sensor (BNO055) on the device.** The device is always pressed *into* the head, so the
   direction it points tells you the spot on the head (the head is roughly a sphere): pointing straight down = top,
   sideways = sides, and so on. Tilt comes from gravity (reliable); which side comes from the compass heading.
-- **No headband**, so the user should sit upright and keep facing the same way as during calibration.
+- **Camera head tracking (optional, recommended).** A webcam on the table watches the face, so the user can
+  turn their head while cutting and HairBarbot still knows which side it's on. Without the camera there's no
+  headband either, so the user has to keep facing the same way as during calibration.
+- **Head shape.** Heads aren't round, so the direction the device points differs from the spot it's on by up to
+  ~25°. The controller uses the head shape (average female/male, your circumference, or a cap 3D scan) to find
+  the exact spot. With the camera it also measures your forehead and uses it as the front no-cut line.
 - **Roller encoder (AS5600).** One roller has a magnet, so HairBarbot knows how far it has rolled. Areas only count
   as cut while the device is actually rolling, and the app shows the distance cut.
 
@@ -41,7 +46,8 @@ pc/vision/head_profile.py      head sizes (ANSUR II averages, your measurement, 
 pc/vision/face_mesh.py         MediaPipe 478-point face mesh (tracks turned heads)
 pc/vision/head_viewer.py       3D wireframe head viewer window
 pc/vision/head_scan.py         import a phone 3D scan (taken with a cap on) as a head profile
-pc/tests/                      tests: simulated haircut, face/scalp estimate, head sizes, scan import
+pc/camera_head.py              camera head tracking for the controller (follows head turns, measures the forehead)
+pc/tests/                      tests: simulated haircut, head tracking, face/scalp estimate, head sizes, scan import
 pc/live/                       Node.js + Socket.io live app: client app + operator dashboard
 docs/budget.xlsx               parts list + budget
 docs/build-book.html           drawings, parts to make, wiring, plan (open in a browser)
@@ -61,6 +67,7 @@ npm run demo          # starts the simulated controller + the live app
   simulated user rolls over it. Shows the area being cut, the roller length vs what that spot needs, distance cut, what's left.
 - **http://localhost:3000/operator** — team dashboard: Home guard → Start calibration → Record each spot →
   Finish calibration (or "Skip calibration (sim)"). Then start a haircut from the client app.
+  Try **Turn head 30° (sim)** mid-cut: the simulated camera keeps the location right.
 - Tests: `cd pc && python tests/test_sim.py` (about 2 minutes; one test runs a full haircut in real time).
 
 ## 1b. Face, head and scalp (webcam + 3D)
@@ -138,12 +145,22 @@ Board: **ESP32 Dev Module** (install "esp32 by Espressif" in Boards Manager).
 2. Switches: `s` shows home switch, trigger, E-stop.
 3. Sensors: `i` prints the IMU angles (tilt the device and watch), `e` prints the roller distance for 5 s (roll it on the table: 10 cm should read ~100 mm).
 4. Relays with the clipper and vacuum **unplugged** first (`C` / `c`, listen for the click).
-5. Flash `firmware/hairbarbot_handheld`, then run `python app.py --port <your port>` and `npm start` in `pc/live`.
+5. Flash `firmware/hairbarbot_handheld`, then run the controller and `npm start` in `pc/live`:
+   ```
+   python3 app.py --port <your port> --camera 0 --head female        # or male, "57 cm", vision/profiles/<you>.json
+   ```
+   `--camera 0` turns on camera head tracking (webcam on the table, facing the user). `--head` picks the head shape
+   (default: average adult). The operator page shows the camera view with the face mesh.
 
 ## 4. Calibrate on each user
-User sits upright, facing forward. In the operator dashboard: **Start calibration** → for each spot (top, back,
-left, right), press the rollers against the head pointing straight at it, keep still, **Record** → **Finish calibration**.
-It reports how well the spots agree (±degrees). Redo it if it says they disagree, or if the user turns their chair.
+In the operator dashboard: **Start calibration** → for each spot (top, back, left, right), hold the device flat on
+the head, keep still, **Record** → **Finish calibration**. It reports how well the spots agree (±degrees).
+- With the camera: keep your face toward the camera while recording. The head may move a bit between spots, and
+  after calibration you can turn your head freely while cutting.
+- Without the camera: sit upright facing forward and stay that way; redo calibration if you turn your chair.
+
+The app suggests starting at the back of the neck and rolling upward (against hair growth), but HairBarbot knows
+where it is, so any order works.
 
 ## 5. Safety layers (keep all of them)
 | Layer | Where | What it does |
@@ -155,6 +172,7 @@ It reports how well the spots agree (±degrees). Redo it if it says they disagre
 | **Wrong spot** | PC, 50 Hz | clipper off while the rollers aren't within ±1.5 mm of the length this spot needs |
 | No-cut zones | PC | clipper off near the face and ears (trim those by hand) |
 | Lost sensor | PC | clipper off if the orientation sensor stops working |
+| Face out of view | PC (with camera) | clipper pauses if the camera can't see the face for 1 s |
 | Unexpected clipper | PC | if the board reports the clipper on without permission → full stop |
 | Hard stop | mechanical | printed stop: the rollers can never go closer than 3 mm |
 

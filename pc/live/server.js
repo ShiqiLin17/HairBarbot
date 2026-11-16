@@ -54,6 +54,16 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 app.use("/vendor/three", express.static(path.join(__dirname, "node_modules", "three")));
 app.get("/operator", (_req, res) => res.sendFile(path.join(__dirname, "public", "operator.html")));
+app.get("/camera.jpg", async (_req, res) => {
+  try {
+    const r = await fetch(`${PY_URL}/api/camera.jpg`, { signal: AbortSignal.timeout(2000) });
+    if (!r.ok) return res.sendStatus(404);
+    res.set("Content-Type", "image/jpeg").set("Cache-Control", "no-store");
+    res.send(Buffer.from(await r.arrayBuffer()));
+  } catch {
+    res.sendStatus(503);
+  }
+});
 
 const server = http.createServer(app);
 const io = new Server(server);
@@ -82,10 +92,12 @@ const COMMANDS = {
   calibDefault: "/api/calibrate/default",
   simTrigger: "/api/sim/trigger",
   simFace: "/api/sim/face",
+  simTurnHead: "/api/sim/turn_head",
 };
 
 let latest = null;      // last controller status
 let styles = null;
+let head = null;         // head shape (average, measured, or 3D scan) for the 3D views
 let linkUp = false;
 
 async function poll() {
@@ -98,6 +110,10 @@ async function poll() {
       styles = (await py("GET", "/api/styles")).json;
       io.emit("styles", styles);
     }
+    if (!head) {
+      head = (await py("GET", "/api/head")).json;
+      io.emit("head", head);
+    }
     io.volatile.emit("state", json);
   } catch {
     if (linkUp) console.log("[live] lost the Python controller, retrying...");
@@ -109,6 +125,7 @@ async function poll() {
 
 io.on("connection", (socket) => {
   if (styles) socket.emit("styles", styles);
+  if (head) socket.emit("head", head);
   if (latest) socket.emit("state", latest);
   socket.emit("link", { python: linkUp, t: Date.now() });
 

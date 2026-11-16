@@ -143,12 +143,26 @@ function render(s) {
   $("#calStart").disabled = !["IDLE", "READY", "DONE"].includes(st);
   $("#calFin").disabled = st !== "CALIBRATING";
 
+  // head shape + camera
+  const cam = s.camera || {}, hd = s.head;
+  $("#headInfo").innerHTML = `
+    <span>Head shape</span><span>${hd ? hd.label + (hd.scan ? " (3D scan)" : "") : "--"}</span>
+    <span>Circumference</span><span>${hd ? (hd.circumference / 10).toFixed(1) + " cm" : "--"}</span>
+    <span>Camera</span><span>${!cam.enabled ? "off" : cam.simulated ? "simulated" : cam.tracker}</span>
+    <span>Face seen</span><span>${cam.enabled ? yes(cam.found, "yes", "NO") : "--"}</span>
+    <span>Head turned</span><span>${cam.enabled && cam.yaw != null ? cam.yaw.toFixed(0) + "°" : "--"}</span>
+    <span>Following head</span><span>${cam.enabled ? (cam.active ? "yes" : "after calibration") : "no (keep head still)"}</span>
+    <span>Forehead line</span><span>${cam.forehead_limit != null ? cam.forehead_limit.toFixed(0) + "° (yours)" : "average"}</span>`;
+  $("#camImg").hidden = !cam.enabled || cam.simulated;
+  $("#camNote").textContent = !cam.enabled ? "No camera. Start the controller with --camera 0 to follow head turns."
+    : cam.simulated ? "Simulated camera (no video). Use \"Turn head\" to test." : "";
   $("#log").innerHTML = (s.events || []).slice().reverse().map((e) => `<li class="${e.kind}"><time>${clock(e.t)}</time><span>${e.text}</span></li>`).join("") || "<li><time></time><span>No events yet.</span></li>";
   view.update(s);
 }
 
 // ---------------------------------------------------------------- socket
 socket.on("state", render);
+socket.on("head", (h) => view.setHead(h));
 let lengthsKey = "";
 socket.on("state", (s) => {
   const key = JSON.stringify([s.lengths, s.fade_to]);
@@ -171,6 +185,11 @@ $("#finishBtn").onclick = () => cmd("finish");
 $("#defBtn").onclick = () => cmd("calibDefault");
 $("#trigBtn").onclick = () => cmd("simTrigger");
 $("#faceBtn").onclick = () => cmd("simFace");
+let turnSign = 1;
+$("#turnBtn").onclick = () => { cmd("simTurnHead", { deg: 30 * turnSign }); turnSign = turnSign > 0 ? 0 : 1; };
+setInterval(() => {
+  if (state && state.camera && state.camera.enabled && !state.camera.simulated) $("#camImg").src = "/camera.jpg?t=" + Date.now();
+}, 250);
 $("#calStart").onclick = () => cmd("calibStart");
 $("#calFin").onclick = () => cmd("calibFinish");
 document.addEventListener("click", (e) => {

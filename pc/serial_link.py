@@ -184,10 +184,18 @@ class SimLink(LinkBase):
     GUARD_SPEED = 15.0   # mm/s, same as firmware
     HAND_SPEED = 30.0    # deg/s along the head
 
-    def __init__(self, speedup=1.0, seed=1):
+    def __init__(self, speedup=1.0, seed=1, profile=None):
         super().__init__()
         rnd = random.Random(seed)
         self.speedup = speedup
+        from orientation import SurfaceLocator
+        self.surface = SurfaceLocator(profile)   # device is held flat: it points along the head's surface normal
+        self.head_yaw = 0.0                       # the user turning their head (deg, + = to their left)
+        self._turn = None                         # (start, end, t0, duration) of a head turn in progress
+        # a webcam on the table in front of the user: room -> camera rotation (fixed)
+        from vision_geometry import head_to_cam_facing
+        self.C_room_to_cam = None
+        self._head_to_cam_facing = head_to_cam_facing
         # the user faces a random direction in the room (head upright): M_true = room axes -> head axes
         self.M_true = _axis_angle([0, 0, 1], rnd.uniform(-180, 180)) @ _axis_angle([1, 0, 0], rnd.uniform(-5, 5))
         self.state = 0
@@ -229,8 +237,22 @@ class SimLink(LinkBase):
     _face_until = 0.0
 
     # --- physics
+    # --- the user's head in the room
+    def world_to_head(self):
+        """room axes -> head axes right now (the head may be turned)."""
+        return self.M_true @ _axis_angle([0, 0, 1], -self.head_yaw)
+
+    def head_to_camera(self):
+        if self.C_room_to_cam is None:   # camera placed in front of the user's starting position
+            self.C_room_to_cam = self._head_to_cam_facing() @ self.M_true
+        return self.C_room_to_cam @ self.world_to_head().T
+
+    def sim_turn_head(self, deg, seconds=1.0):
+        """The simulated user turns their head to `deg` (to their left = +) over `seconds`."""
+        self._turn = (self.head_yaw, float(deg), time.time(), seconds / self.speedup)
+
     def _quat(self):
-        n_world = self.M_true.T @ direction(*self.hand)
+        n_world = self.world_to_head().T @ self.surface.normal(*self.hand)
         a = np.array(config.CLIP_AXIS, float)
         R = _axis_angle(-n_world, self.roll) @ _rot_from_to(a, -n_world)
         return matrix_to_quat(R)
@@ -250,6 +272,12 @@ class SimLink(LinkBase):
                 d = self.target_mm - self.guard_mm
                 self.guard_mm += max(-step, min(step, d))
             # simulated user
+            if self._turn:
+                a, b, t0, dur = self._turn
+                f = min(1.0, (now - t0) / max(dur, 1e-6))
+                self.head_yaw = a + (b - a) * f
+                if f >= 1.0:
+                    self._turn = None
             self.roll = 25.0 * math.sin(now * 0.7)          # wrist roll: must not affect the location
             if self.auto:
                 if now < self._face_until:

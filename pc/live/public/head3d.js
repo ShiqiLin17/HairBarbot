@@ -9,7 +9,9 @@ const HAIR_SHORT = new THREE.Color("#d8c4b2");   // short hair: scalp shows thro
 const HAIR_LONG = new THREE.Color("#2b211c");    // long hair: dark
 const UNCUT = new THREE.Color("#3a2c25");        // hair not cut yet
 const SKIN = new THREE.Color("#e2bfa4");
-const HEAD = { a: 100, b: 78, c: 112 };          // ellipsoid half-sizes in mm (front/back, side, top)
+// Head shape in mm: an ellipsoid (front/back, side, top half-sizes) or a scanned radius grid.
+// Replaced by the controller's head profile (average, measured, or 3D scan) via setHead().
+let SHAPE = { a: 100, b: 77, c: 129, grid: null, step: 5 };
 
 export function toThree(yaw, pitch, r) {
   const y = yaw * D2R, p = pitch * D2R;
@@ -18,9 +20,19 @@ export function toThree(yaw, pitch, r) {
 }
 
 function radius(yaw, pitch) {
+  const g = SHAPE.grid;
+  if (g) {                                       // scanned head: bilinear lookup, rows = pitch, cols = yaw
+    const st = SHAPE.step;
+    const fi = Math.max(0, Math.min(g.length - 1, pitch / st));
+    const fj = ((((yaw + 180) % 360) + 360) % 360) / st;
+    const i0 = Math.floor(fi), i1 = Math.min(g.length - 1, i0 + 1);
+    const j0 = Math.floor(fj) % (g[0].length - 1), j1 = (j0 + 1) % (g[0].length - 1);
+    const ti = fi - i0, tj = fj - Math.floor(fj);
+    return (1 - ti) * ((1 - tj) * g[i0][j0] + tj * g[i0][j1]) + ti * ((1 - tj) * g[i1][j0] + tj * g[i1][j1]);
+  }
   const y = yaw * D2R, p = pitch * D2R;
   const dx = Math.sin(p) * Math.cos(y), dy = Math.sin(p) * Math.sin(y), dz = Math.cos(p);
-  return 1 / Math.sqrt((dx / HEAD.a) ** 2 + (dy / HEAD.b) ** 2 + (dz / HEAD.c) ** 2);
+  return 1 / Math.sqrt((dx / SHAPE.a) ** 2 + (dy / SHAPE.b) ** 2 + (dz / SHAPE.c) ** 2);
 }
 
 function gridLookup(grid, yaw, pitch, smooth) {
@@ -64,29 +76,40 @@ export function createHeadView(container, { follow = true, gmin = 3, gmax = 60 }
   const geo = new THREE.SphereGeometry(1, 144, 108);
   const pos = geo.attributes.position;
   const n = pos.count;
-  const yawDeg = new Float32Array(n), pitchDeg = new Float32Array(n);
+  const yawDeg = new Float32Array(n), pitchDeg = new Float32Array(n), unit = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) {
     const X = pos.getX(i), Y = pos.getY(i), Z = pos.getZ(i);
+    unit.set([X, Y, Z], i * 3);
     pitchDeg[i] = Math.acos(Math.max(-1, Math.min(1, Y))) / D2R;
     yawDeg[i] = Math.atan2(X, Z) / D2R;
-    const r = radius(yawDeg[i], pitchDeg[i]) / 100;
-    pos.setXYZ(i, X * r, Y * r, Z * r);
   }
-  geo.computeVertexNormals();
+  function shapeHead() {
+    for (let i = 0; i < n; i++) {
+      const r = radius(yawDeg[i], pitchDeg[i]) / 100;
+      pos.setXYZ(i, unit[i * 3] * r, unit[i * 3 + 1] * r, unit[i * 3 + 2] * r);
+    }
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+  }
+  shapeHead();
   geo.setAttribute("color", new THREE.BufferAttribute(new Float32Array(n * 3), 3));
   scene.add(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85 })));
 
   const skinMat = new THREE.MeshStandardMaterial({ color: SKIN, roughness: 0.8 });
   const nose = new THREE.Mesh(new THREE.ConeGeometry(0.11, 0.3, 20), skinMat);
-  nose.position.copy(toThree(0, 96, radius(0, 96) / 100 + 0.08));
   nose.rotation.set(Math.PI / 2, 0, 0);
   scene.add(nose);
-  [90, -90].forEach((yw) => {
+  const ears = [90, -90].map((yw) => {
     const e = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 16), skinMat);
     e.scale.set(0.05, 0.27, 0.15);
-    e.position.copy(toThree(yw, 98, radius(yw, 98) / 100));
     scene.add(e);
+    return [yw, e];
   });
+  function placeFace() {
+    nose.position.copy(toThree(0, 100, radius(0, 100) / 100 + 0.08));
+    ears.forEach(([yw, e]) => e.position.copy(toThree(yw, 98, radius(yw, 98) / 100)));
+  }
+  placeFace();
   const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.55, 1.4, 32), skinMat);
   neck.position.set(0, -1.15, -0.1);
   scene.add(neck);
@@ -155,6 +178,14 @@ export function createHeadView(container, { follow = true, gmin = 3, gmax = 60 }
   let followYaw = null;
   let gridV = 0;
   const api = {
+    setHead(h) {
+      if (!h || !h.length) return;
+      SHAPE = { a: h.length / 2, b: h.breadth / 2, c: h.ear_to_top, grid: h.grid || null, step: h.grid_step_deg || 5 };
+      shapeHead();
+      placeFace();
+      paintKey = "";
+      maybePaint();
+    },
     setLengths(g) { lengthsGrid = g ? { ...g, v: ++gridV } : null; maybePaint(); },
     update(s) {
       if (!s) return;

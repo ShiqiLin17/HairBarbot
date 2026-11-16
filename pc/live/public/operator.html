@@ -91,6 +91,7 @@
         <button class="b" id="defBtn">Skip calibration (sim)</button>
         <button class="b" id="trigBtn">Toggle trigger (sim)</button>
         <button class="b" id="faceBtn">Drift to face (sim)</button>
+        <button class="b" id="turnBtn">Turn head 30° / back (sim)</button>
       </div>
     </div>
     <div class="card">
@@ -124,6 +125,12 @@
     <div class="card">
       <h2>Sensors</h2>
       <div class="kv" id="sensors"></div>
+    </div>
+    <div class="card">
+      <h2>Head &amp; camera</h2>
+      <img id="camImg" alt="Camera view with the face mesh and scalp" style="width:100%;border-radius:10px;background:#000" hidden>
+      <p class="small" id="camNote"></p>
+      <div class="kv" id="headInfo"></div>
     </div>
     <div class="card">
       <h2>Coverage by area</h2>

@@ -108,7 +108,7 @@ function render(s) {
 
   const canStart = (st === "READY" || st === "DONE") && !s.busy;
   $("#startBtn").disabled = !canStart;
-  $("#waitNote").textContent = canStart ? "Sit upright facing forward, press the rollers against your head and squeeze the trigger." :
+  $("#waitNote").textContent = canStart ? "Tip: start at the back of your neck and roll upward, against the way your hair grows. Press the rollers against your head and squeeze the trigger." :
     st === "CALIBRATING" ? "Calibrating: hold the device at each spot the operator asks for." :
     "Getting HairBarbot ready. You can choose your haircut now.";
 
@@ -119,8 +119,9 @@ function render(s) {
     $("#now").textContent = m.clipper && loc ? `Cutting the ${loc.region}` : loc ? `On the ${loc.region}` : "Bring the rollers to your head";
     $("#elapsed").textContent = live.elapsed != null ? `${fmtTime(live.elapsed)} so far` : "";
     const hint = $("#hint");
-    hint.hidden = !live.hint || live.block === "trigger";
-    hint.textContent = live.hint || "";
+    const tip = cov.pct < 0.03 && !live.hint ? "Tip: start at the back of your neck and roll upward." : "";
+    hint.hidden = !(tip || (live.hint && live.block !== "trigger"));
+    hint.textContent = tip || live.hint || "";
     hint.className = "hint" + (live.block === "zone" ? " zone" : "");
     $("#gval").textContent = live.need_guard != null ? `${m.guard.toFixed(1)} mm (needs ${live.need_guard.toFixed(0)})` : `${m.guard.toFixed(1)} mm`;
     $("#gfill").style.width = pctOf(m.guard) + "%";
@@ -146,6 +147,7 @@ function render(s) {
 // ---------------------------------------------------------------- socket
 socket.on("styles", (j) => { if (Object.keys(styles).length) return; styles = j.styles; gmin = j.guard_min; gmax = j.guard_max; buildPicker(); });
 socket.on("state", render);
+socket.on("head", (h) => view.setHead(h));
 socket.on("link", (l) => { $("#offline").hidden = l.python; });
 socket.on("disconnect", () => { $("#offline").hidden = false; });
 socket.on("connect", () => { $("#offline").hidden = true; });

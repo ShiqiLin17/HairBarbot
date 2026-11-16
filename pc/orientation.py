@@ -110,3 +110,62 @@ def max_pitch(yaw: float) -> float:
 
 def in_cut_zone(yaw: float, pitch: float) -> bool:
     return pitch <= max_pitch(yaw) - config.ZONE_MARGIN
+
+
+def set_forehead_limit(pitch):
+    """Use this person's forehead hairline (pitch from the crown, measured by the camera) for the front
+    no-cut line instead of the average 55 deg. Clamped to a sensible range."""
+    p = float(max(45.0, min(65.0, pitch)))
+    ZONE_PITCH[0] = ZONE_PITCH[1] = p
+    return p
+
+
+def reset_zones():
+    ZONE_PITCH[:] = [55, 55, 70, 75, 75, 90, 105, 105]
+
+
+# ---- locating on the REAL head shape
+class SurfaceLocator:
+    """Finds the spot on the head whose surface faces a given direction.
+
+    The device is pressed flat against the head, so it points along the surface normal at the spot it's on.
+    On a round head the normal points straight out from the center, so direction = spot. On a real head
+    (longer than it is wide, flatter on the sides) they differ by up to ~10-15 deg, so with a head profile
+    (average size, measured, or a 3D scan) we look up the spot whose normal matches."""
+
+    def __init__(self, profile=None, step=2.0):
+        self.profile = profile
+        if profile is None:
+            return
+        spots, normals = [], []
+        for p in np.arange(0.0, 125.0 + 1e-9, step):
+            for y in np.arange(-180.0, 180.0, step if p > 0 else 360.0):
+                _, n = profile.surface(float(y), float(p))
+                spots.append((float(y), float(p)))
+                normals.append(n)
+        self.spots = np.array(spots)
+        self.normals = np.array(normals)
+
+    def spot(self, n_head):
+        """Outward surface direction in head axes -> (yaw, pitch) of the spot."""
+        if self.profile is None:
+            return yaw_pitch(n_head)
+        n = np.asarray(n_head, float)
+        dots = self.normals @ (n / (np.linalg.norm(n) or 1.0))
+        top = np.argpartition(-dots, 6)[:6]                 # the 6 grid spots facing closest to n
+        ang = np.arccos(np.clip(dots[top], -1.0, 1.0))
+        w = 1.0 / (ang + 1e-4) ** 2                        # blend them, closest counts most
+        best = top[np.argmax(dots[top])]
+        y0 = self.spots[best, 0]
+        dy = (self.spots[top, 0] - y0 + 180.0) % 360.0 - 180.0
+        if self.spots[best, 1] < 4.0:                      # at the crown yaw is meaningless: don't blend it
+            dy = dy * 0.0
+        yaw = (y0 + float(np.sum(w * dy) / np.sum(w)) + 180.0) % 360.0 - 180.0
+        pitch = float(np.sum(w * self.spots[top, 1]) / np.sum(w))
+        return yaw, pitch
+
+    def normal(self, yaw, pitch):
+        """Direction the device points when held flat at (yaw, pitch) (for calibration targets)."""
+        if self.profile is None:
+            return direction(yaw, pitch)
+        return self.profile.surface(yaw, pitch)[1]

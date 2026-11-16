@@ -23,7 +23,8 @@ import traceback
 import numpy as np
 
 import config
-from orientation import calibrate, direction, in_cut_zone, locate, max_pitch, measured_vector
+import orientation
+from orientation import SurfaceLocator, calibrate, direction, in_cut_zone, max_pitch, measured_vector
 from styles import STYLES, guard_length, region_name, validate_lengths
 
 # coverage grid: same layout as styles.preview_grid (pitch rows 0..110 step 5, yaw cols -180..180 step 10)
@@ -36,6 +37,7 @@ HINTS = {
     "guard": "Slow down: the guard is adjusting.",
     "sensors": "Can't tell where the device is. Check the orientation sensor.",
     "estop": "E-stop is pressed.",
+    "camera": "Face the camera so it can see where your head is.",
 }
 
 
@@ -44,7 +46,16 @@ class ControllerError(Exception):
 
 
 class Controller:
-    def __init__(self, link, sim=False):
+    CAMERA_LOST_S = 1.0                     # face out of view this long while cutting -> clipper pauses
+
+    def __init__(self, link, sim=False, profile=None, camera=None):
+        orientation.reset_zones()
+        self.profile = profile              # head shape: average, measured, or a 3D scan (vision/head_profile.py)
+        self.locator = SurfaceLocator(profile)
+        self.camera = camera                # CameraHead / SimCameraHead, or None
+        self.R_cam0 = None                  # head -> camera rotation at calibration
+        self._M_eff = None
+        self.forehead_pitch = None
         self.link = link
         self.sim = sim
         self.state = "NOT_HOMED"
@@ -125,7 +136,8 @@ class Controller:
         self._require("IDLE", "READY", "DONE")
         self.calib_pairs = {}
         self.state = "CALIBRATING"
-        self.message = "Hold the clipper at each spot, pointing straight at the head, and press Record."
+        self.message = ("Hold the device flat on each spot and press Record."
+                        + (" Keep your face toward the camera." if self.camera else ""))
         self._log("Calibration started")
 
     def calib_record(self, i):
@@ -141,33 +153,71 @@ class Controller:
             raise ControllerError("The orientation sensor must be working to calibrate.")
         if len(self.recent_v) < 5:
             raise ControllerError("No sensor readings yet. Wait a second and try again.")
+        R_cam = None
+        if self.camera is not None:
+            R_cam, age = self.camera.pose()
+            if R_cam is None or age > 0.5:
+                raise ControllerError("The camera can't see your face. Face the camera and try again.")
         v = np.mean(list(self.recent_v)[-10:], axis=0)
         v /= np.linalg.norm(v)
-        self.calib_pairs[i] = (v, direction(yaw, pitch))
+        # target: the direction the device points when held flat on that spot of THIS head shape
+        self.calib_pairs[i] = (v, self.locator.normal(yaw, pitch), R_cam)
         self.message = f"Recorded: {name}. {len(self.calib_pairs)} of {len(config.CALIB_POSES)} spots."
 
     def calib_finish(self):
         self._require("CALIBRATING")
+        pairs = list(self.calib_pairs.values())
+        R0 = pairs[0][2] if pairs and pairs[0][2] is not None else None
+        if R0 is not None:
+            # the head may have moved between spots: express every target in the head pose of the first spot
+            pairs = [(v, R0.T @ Rc @ n) for v, n, Rc in pairs]
+        else:
+            pairs = [(v, n) for v, n, _ in pairs]
         try:
-            M, err = calibrate(list(self.calib_pairs.values()))
+            M, err = calibrate(pairs)
         except ValueError as e:
             raise ControllerError(str(e))
         if err > config.CALIB_MAX_ERROR_DEG:
             raise ControllerError(f"Spots disagree by {err:.0f} degrees. Re-record them, holding the clipper "
                                   "straight at the head and keeping the head still.")
-        self.M, self.calib_err = M, err
+        self.M, self.calib_err, self.R_cam0 = M, err, R0
         self.state = "READY"
         self.message = f"Calibrated (accuracy about {err:.0f}°). Choose a haircut."
         self._log(f"Calibrated, worst spot off by {err:.1f}°", "ok")
+        self._apply_forehead()
 
     def calib_default(self):
         """Simulation only: use the simulator's true mounting instead of touching spots."""
         if not self.sim:
             raise ControllerError("Only available in simulation.")
         self._require("IDLE", "READY", "DONE", "CALIBRATING")
-        self.M, self.calib_err = self.link.M_true.copy(), 0.0
+        self.M, self.calib_err = self.link.world_to_head(), 0.0
+        self.R_cam0 = self.camera.pose()[0] if self.camera is not None else None
         self.state, self.message = "READY", "Calibrated (simulation). Choose a haircut."
         self._log("Simulated calibration loaded")
+
+    def _apply_forehead(self):
+        """Use the camera's view of this person's forehead for the front no-cut line."""
+        fp = self.camera.forehead_pitch() if self.camera is not None else None
+        if fp is None:
+            return
+        self.forehead_pitch = orientation.set_forehead_limit(fp - 3.0)     # stay 3 deg above the face mesh top
+        self._cuttable = np.array([p <= max_pitch(y) for p, y in self._cells])
+        self._log(f"Front no-cut line set from your forehead: {self.forehead_pitch:.0f}° from the crown")
+
+    def _room_to_head(self, now):
+        """Calibration, corrected for head turns seen by the camera since calibration."""
+        if self.M is None:
+            return None
+        if self.camera is None or self.R_cam0 is None:
+            return self.M
+        R, age = self.camera.pose()
+        if R is not None and age < 0.3:
+            self._M_eff = R.T @ self.R_cam0 @ self.M
+            self._camera_lost_since = None
+        else:
+            self._camera_lost_since = getattr(self, "_camera_lost_since", None) or now
+        return self._M_eff if self._M_eff is not None else self.M
 
     # ------------------------------------------------------------ session
     def start(self, lengths, fade_to=None, style=None):
@@ -243,7 +293,12 @@ class Controller:
         imu_ok = st["imu_ok"]
         if imu_ok:
             self.recent_v.append(measured_vector(st["q"]))
-        self.loc = locate(st["q"], self.M) if (imu_ok and self.M is not None) else None
+        M = self._room_to_head(now)
+        self.loc = (tuple(float(x) for x in self.locator.spot(M @ measured_vector(st["q"])))
+                    if (imu_ok and M is not None) else None)
+        camera_lost = (self.camera is not None and self.R_cam0 is not None
+                       and getattr(self, "_camera_lost_since", None) is not None
+                       and now - self._camera_lost_since > self.CAMERA_LOST_S)
         # roller: speed and "is it rolling on the head?"
         if st["enc_ok"] and dt > 0:
             if self._last_rolled is not None:
@@ -270,6 +325,8 @@ class Controller:
                 self.block = "estop"
             elif not self.loc:
                 self.block = "sensors"
+            elif camera_lost:
+                self.block = "camera"
             elif not in_cut_zone(*self.loc):
                 self.block = "zone"
             elif abs(st["guard"] - self.target) > config.GUARD_TOL:
@@ -356,10 +413,14 @@ class Controller:
             "sim": self.sim,
             "machine": {k: v for k, v in st.items()},
             "fault": self.link.last_fault,
-            "location": ({"yaw": round(loc[0], 1), "pitch": round(loc[1], 1), "region": region_name(*loc),
-                          "in_zone": in_cut_zone(*loc)} if loc else None),
+            "location": ({"yaw": round(float(loc[0]), 1), "pitch": round(float(loc[1]), 1),
+                          "region": region_name(*loc), "in_zone": bool(in_cut_zone(*loc))} if loc else None),
             "live": live,
             "coverage": self.coverage(),
+            "head": ({"label": self.profile.label, "circumference": round(self.profile.circumference),
+                      "scan": self.profile.grid is not None} if self.profile else None),
+            "camera": dict(self.camera.info(), active=self.R_cam0 is not None,
+                           forehead_limit=self.forehead_pitch) if self.camera else {"enabled": False},
             "calibration": {"poses": [p[0] for p in config.CALIB_POSES], "recorded": sorted(self.calib_pairs),
                             "calibrated": self.M is not None,
                             "error_deg": None if self.calib_err is None else round(self.calib_err, 1)},
