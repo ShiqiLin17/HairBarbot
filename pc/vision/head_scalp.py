@@ -299,11 +299,24 @@ def main():
     if not cap.isOpened():
         sys.exit(f"Can't open camera {a.camera}. Try --camera 1, and allow camera access for your terminal "
                  "(Mac: System Settings > Privacy & Security > Camera).")
-    t_last, fps = time.time(), 0.0
+    t_last, fps, fails = time.time(), 0.0, 0
     while True:
         ok, frame = cap.read()
         if not ok:
-            break
+            # cameras (especially on a Mac right after allowing access) can take a moment to send frames
+            if fails == 0:
+                print("Waiting for the camera...")
+            fails += 1
+            if fails > 60:   # ~3 s
+                sys.exit("The camera opened but sent no picture.\n"
+                         "Mac: System Settings > Privacy & Security > Camera > turn ON your terminal app,\n"
+                         "then QUIT the terminal completely (Cmd+Q), reopen it, and run this again.\n"
+                         "Also close other apps using the camera (Zoom, FaceTime, Photo Booth), or try --camera 1.")
+            time.sleep(0.05)
+            continue
+        if fails:
+            print("Camera OK.")
+            fails = 0
         e = est.estimate(frame, a.style)
         out = draw(frame, e, est.camera_matrix(frame.shape[1], frame.shape[0]), a.style, mirror=a.mirror)
         now = time.time()
