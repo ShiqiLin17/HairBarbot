@@ -11,14 +11,17 @@ How it works
      wants there, plus the crown, the head axes, and the head angles.
 
 Run it (from the pc folder):
-  python vision/head_scalp.py                      # webcam 0
+  python vision/head_scalp.py                      # webcam 0, asks for head size first (female / male / your own)
+  python vision/head_scalp.py --sex male           # skip the menu
+  python vision/head_scalp.py --head-circ "57 cm"  # skip the menu with your own measurement
   python vision/head_scalp.py --camera 1           # another webcam
   python vision/head_scalp.py --image photo.jpg    # a photo (saves photo_scalp.png next to it)
   python vision/head_scalp.py --style buzz         # color by another style (see styles.py)
 Keys: q = quit, s = save a screenshot.
 
-Accuracy: it's an estimate. It assumes an average adult head (scale it with --head-scale) and a
-typical webcam field of view (--fov). It cannot see the back of the head; it infers it from the face.
+Accuracy: it's an estimate. Head size comes from the menu (ANSUR II averages or your measurement, see
+head_profile.py), and it assumes a typical webcam field of view (--fov). It cannot see the back of the
+head; it infers it from the face.
 """
 import argparse
 import math
@@ -35,6 +38,8 @@ sys.path.insert(0, os.path.dirname(HERE))          # so we can import pc/ module
 
 from orientation import max_pitch                   # noqa: E402  (same no-cut zones as the controller)
 from styles import STYLES, guard_length, region_name  # noqa: E402
+from head_profile import (ask_head_profile, average_profile, check_circumference,  # noqa: E402
+                          parse_length, personalized_profile)
 
 MODEL_PATH = os.path.join(HERE, "models", "face_detection_yunet_2023mar.onnx")
 
@@ -49,7 +54,6 @@ FACE_POINTS = np.array([
     [82.0, -25.0, -50.0],   # right mouth corner
     [82.0, 25.0, -50.0],    # left mouth corner
 ])
-HEAD_AXES = (100.0, 78.0, 112.0)   # ellipsoid half-sizes: front/back, side, top (mm) — same as the 3D app view
 
 
 def ellipsoid_point(yaw, pitch, axes):
@@ -90,14 +94,15 @@ class HeadEstimate:
 
 
 class HeadScalpEstimator:
-    def __init__(self, model_path=MODEL_PATH, fov_deg=60.0, head_scale=1.0, min_score=0.8, smooth=0.5):
+    def __init__(self, model_path=MODEL_PATH, fov_deg=60.0, profile=None, min_score=0.8, smooth=0.5):
         if not hasattr(cv2, "FaceDetectorYN"):
             raise RuntimeError("Your OpenCV is too old. Run: pip install --upgrade opencv-python  (needs 4.8+)")
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Face model not found: {model_path}")
         self.detector = cv2.FaceDetectorYN.create(model_path, "", (320, 320), min_score, 0.3, 5000)
         self.fov = fov_deg
-        self.scale = head_scale
+        self.profile = profile or average_profile("male")
+        self.scale = self.profile.face_scale
         self.smooth = smooth            # 0 = no smoothing, 0.9 = very smooth (laggy)
         self.grid = build_scalp_grid()
         self._prev = None               # (rvec, tvec) from the last frame
@@ -165,7 +170,7 @@ class HeadScalpEstimator:
         # ---- visible scalp points
         K = self.camera_matrix(w, h)
         st = STYLES.get(style)
-        axes = tuple(a * self.scale for a in HEAD_AXES)
+        axes = self.profile.axes
         pts3, keep = [], []
         for (gy, gp, cuttable) in self.grid:
             if not cuttable:
@@ -223,7 +228,7 @@ def length_color(L, lo=3, hi=60):
     return tuple(int(v) for v in a + (b - a) * t)
 
 
-def draw(frame, est, K=None, style="fade25", mirror=False):
+def draw(frame, est, K=None, style="fade25", mirror=False, profile=None):
     """Overlay the estimate. With mirror=True the picture is flipped for display (text stays readable);
     the estimate itself is always made on the unflipped camera image."""
     out = frame.copy()
@@ -264,7 +269,9 @@ def draw(frame, est, K=None, style="fade25", mirror=False):
     lines = [f"yaw {est.yaw:+.0f}  pitch {est.pitch:+.0f}  roll {est.roll:+.0f} deg",
              f"distance {est.distance_mm / 10:.0f} cm   fit error {est.reproj_err_px:.1f} px",
              f"style: {name}"]
-    cv2.rectangle(out, (8, 8), (400, 16 + 24 * len(lines)), (30, 30, 30), -1)
+    if profile is not None:
+        lines.append(f"head: {profile.label.lower()}, {profile.circumference / 10:.1f} cm around")
+    cv2.rectangle(out, (8, 8), (430, 16 + 24 * len(lines)), (30, 30, 30), -1)
     for i, t in enumerate(lines):
         cv2.putText(out, t, (16, 30 + 24 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
     return out
@@ -277,17 +284,28 @@ def main():
     ap.add_argument("--image", help="run on a photo instead of the webcam")
     ap.add_argument("--style", default="fade25", choices=sorted(STYLES))
     ap.add_argument("--fov", type=float, default=60.0, help="webcam horizontal field of view in degrees")
-    ap.add_argument("--head-scale", type=float, default=1.0, help="1.1 = 10%% bigger head than average")
+    ap.add_argument("--sex", choices=["female", "male"], help="use the average head for this sex (skips the menu)")
+    ap.add_argument("--head-circ", help='your head circumference with units, e.g. "57 cm" or "22.5 in" (skips the menu)')
     ap.add_argument("--mirror", action="store_true", help="show the video flipped like a mirror (display only)")
     a = ap.parse_args()
-    est = HeadScalpEstimator(fov_deg=a.fov, head_scale=a.head_scale)
+    if a.head_circ:
+        try:
+            profile = personalized_profile(check_circumference(parse_length(a.head_circ)))
+        except ValueError as err:
+            sys.exit(f"--head-circ: {err}")
+    elif a.sex:
+        profile = average_profile(a.sex)
+    else:
+        profile = ask_head_profile()
+    print("Using", profile.describe())
+    est = HeadScalpEstimator(fov_deg=a.fov, profile=profile)
 
     if a.image:
         frame = cv2.imread(a.image)
         if frame is None:
             sys.exit(f"Can't read {a.image}")
         e = est.estimate(frame, a.style)
-        out = draw(frame, e, est.camera_matrix(frame.shape[1], frame.shape[0]), a.style)
+        out = draw(frame, e, est.camera_matrix(frame.shape[1], frame.shape[0]), a.style, profile=profile)
         path = os.path.splitext(a.image)[0] + "_scalp.png"
         cv2.imwrite(path, out)
         print(("found face: " + f"yaw {e.yaw:+.0f}, pitch {e.pitch:+.0f}, roll {e.roll:+.0f}, "
@@ -318,7 +336,8 @@ def main():
             print("Camera OK.")
             fails = 0
         e = est.estimate(frame, a.style)
-        out = draw(frame, e, est.camera_matrix(frame.shape[1], frame.shape[0]), a.style, mirror=a.mirror)
+        out = draw(frame, e, est.camera_matrix(frame.shape[1], frame.shape[0]), a.style, mirror=a.mirror,
+                   profile=profile)
         now = time.time()
         fps = 0.9 * fps + 0.1 / max(1e-3, now - t_last)
         t_last = now

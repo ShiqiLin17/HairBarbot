@@ -37,6 +37,7 @@ pc/orientation.py              quaternion math, calibration (Kabsch), no-cut zon
 pc/styles.py                   hairstyles: length per region + fade (e.g. "Fade 2 cm -> 5 cm")
 pc/serial_link.py              serial protocol to the ESP32 + a full simulator (fake board + fake user)
 pc/vision/head_scalp.py        webcam: find the face, estimate head pose, draw where the scalp is
+pc/vision/head_profile.py      head sizes (ANSUR II female/male averages or your own measurement) + startup menu
 pc/tests/                      tests: full simulated haircut (test_sim.py), face/scalp estimate (test_vision.py)
 pc/live/                       Node.js + Socket.io live app: client app + operator dashboard
 docs/budget.xlsx               parts list + budget
@@ -71,7 +72,20 @@ Finds the face (OpenCV's YuNet detector, model included in `pc/vision/models`), 
 5 landmarks (eyes, nose, mouth corners) to get the head's **yaw / pitch / roll** and distance, then attaches a
 head-sized ellipsoid behind the face. The visible scalp (above the face/ear no-cut line) is drawn on the video,
 colored by the length the chosen style wants there (`--style fade25`), plus the estimated crown.
-Keys: `q` quit, `s` screenshot. If the scalp looks too small or big, try `--head-scale 1.1` or `--fov 70`.
+Keys: `q` quit, `s` screenshot.
+
+**Head size menu** (at startup): `1` female, `2` male, `3` personalized. Options 1 and 2 use median head sizes
+from **ANSUR II**, the 2012 U.S. Army anthropometric survey of 1,986 women and 4,082 men
+([data](https://www.openlab.psu.edu/datasets/ansur2/), Gordon et al., NATICK/TR-15/007):
+
+| | head circumference | head length | head width | ear to top of head |
+|---|---|---|---|---|
+| Female | 56.0 cm | 19.0 cm | 14.7 cm | 12.7 cm |
+| Male | 57.4 cm | 20.0 cm | 15.4 cm | 13.1 cm |
+
+Option 3 asks for your head circumference with units (`57 cm`, `22.5 in`, `570 mm`) and scales the average head
+to match. Skip the menu with `--sex female`, `--sex male` or `--head-circ "57 cm"`. If the scalp still sits off,
+try `--fov 70` (wider webcam).
 On a Mac, allow camera access for your terminal (System Settings → Privacy & Security → Camera).
 
 Next step: feed the camera's head yaw into the controller, so the user no longer has to keep facing forward.
