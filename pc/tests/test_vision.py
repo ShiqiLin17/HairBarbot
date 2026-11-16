@@ -40,7 +40,7 @@ def test_angles_signs():
 
 
 def test_facing_camera_puts_right_eye_on_image_left():
-    est = HeadScalpEstimator()
+    est = HeadScalpEstimator(tracker="yunet")
     K = est.camera_matrix(640, 480)
     R, t = make_pose(0, 0, 0)
     px = project(R, t, K)
@@ -49,7 +49,7 @@ def test_facing_camera_puts_right_eye_on_image_left():
 
 
 def test_pose_recovered_from_landmarks_even_with_swapped_labels():
-    est = HeadScalpEstimator(smooth=0)
+    est = HeadScalpEstimator(smooth=0, tracker="yunet")
     K = est.camera_matrix(640, 480)
     for yaw, pitch, roll, dist in [(0, 0, 0, 450), (30, 5, 0, 500), (-35, -10, 5, 600), (15, 15, -10, 400)]:
         R, t = make_pose(yaw, pitch, roll, dist, dx=20, dy=-15)
@@ -64,7 +64,7 @@ def test_pose_recovered_from_landmarks_even_with_swapped_labels():
 
 
 def test_scalp_is_above_the_face_and_drawn():
-    est = HeadScalpEstimator(smooth=0)
+    est = HeadScalpEstimator(smooth=0, tracker="yunet")
     K = est.camera_matrix(640, 480)
     R, t = make_pose(0, -5, 0, 600)
     px = project(R, t, K)
@@ -85,9 +85,78 @@ def test_scalp_is_above_the_face_and_drawn():
 
 
 def test_no_face():
-    est = HeadScalpEstimator()
+    est = HeadScalpEstimator(tracker="yunet")
     e = est.estimate(np.zeros((480, 640, 3), np.uint8))
     assert not e.found
+
+
+
+# ---------------------------------------------------------------- MediaPipe path, with a simulated mesh
+def fake_mesh(R, t, K, n=478, seed=0):
+    """478 'face' points in head coordinates, with the 5 key landmarks placed on FACE_POINTS,
+    projected like MediaPipe reports them: pixels + depth relative to the head center (pixel scale)."""
+    from face_mesh import LEFT_EYE, MOUTH_LEFT, MOUTH_RIGHT, NOSE_TIP, RIGHT_EYE
+    rng = np.random.default_rng(seed)
+    P = np.column_stack([rng.uniform(70, 100, n), rng.uniform(-60, 60, n), rng.uniform(-70, 40, n)])
+    for idx, c in zip(RIGHT_EYE, ([0, -12, 0], [0, 12, 0])):
+        P[idx] = FACE_POINTS[0] + c
+    for idx, c in zip(LEFT_EYE, ([0, -12, 0], [0, 12, 0])):
+        P[idx] = FACE_POINTS[1] + c
+    P[NOSE_TIP], P[MOUTH_RIGHT], P[MOUTH_LEFT] = FACE_POINTS[2], FACE_POINTS[3], FACE_POINTS[4]
+    pc = P @ R.T + t
+    f, cx, cy = K[0, 0], K[0, 2], K[1, 2]
+    px = np.column_stack([f * pc[:, 0] / pc[:, 2] + cx, f * pc[:, 1] / pc[:, 2] + cy])
+    z = (pc[:, 2] - t[2]) * f / t[2]
+    return P, px, z
+
+
+class FakeMesh:
+    def __init__(self, px, z):
+        self.px, self.z = px, z
+        self.edges = np.array([(i, i + 1) for i in range(0, 470, 2)])
+
+    def detect(self, frame):
+        return self.px, self.z
+
+
+def test_mediapipe_path_pose_and_3d_mesh():
+    from face_mesh import mesh_to_head
+    est = HeadScalpEstimator(smooth=0, tracker="yunet")
+    K = est.camera_matrix(640, 480)
+    R, t = make_pose(40, 5, 0, 550)          # head turned 40 deg: YuNet would often lose this
+    P, px, z = fake_mesh(R, t, K)
+    est.mesh = FakeMesh(px, z)
+    est.mesh_edges = est.mesh.edges
+    e = est.estimate(np.zeros((480, 640, 3), np.uint8))
+    assert e.found and abs(e.yaw - 40) < 2 and e.mesh_px.shape == (478, 2)
+    err = np.linalg.norm(e.mesh_head - P, axis=1)
+    assert np.median(err) < 3, np.median(err)               # 3D mesh lands back where it was, within ~mm
+    assert np.allclose(mesh_to_head(px, z, K, R, t), P, atol=1e-6)
+    out = draw(np.zeros((480, 640, 3), np.uint8), e, K, mesh_edges=est.mesh_edges, tracker="mediapipe")
+    assert out.any()
+
+
+def test_hold_last_pose_briefly():
+    est = HeadScalpEstimator(smooth=0, tracker="yunet")
+    K = est.camera_matrix(640, 480)
+    R, t = make_pose(0, 0, 0, 500)
+    P, px, z = fake_mesh(R, t, K)
+    est.mesh = FakeMesh(px, z)
+    assert est.estimate(np.zeros((480, 640, 3), np.uint8)).found
+    est.mesh.detect = lambda frame: None                      # face disappears
+    e = est.estimate(np.zeros((480, 640, 3), np.uint8))
+    assert e.found and e.holding
+
+
+def test_viewer_renders_with_mesh():
+    from head_profile import average_profile
+    from head_viewer import HeadViewer
+    est = HeadScalpEstimator(smooth=0, tracker="yunet")
+    K = est.camera_matrix(640, 480)
+    R, t = make_pose(0, 0, 0, 500)
+    P, px, z = fake_mesh(R, t, K)
+    img = HeadViewer().render(average_profile("female"), P, np.array([(i, i + 1) for i in range(0, 470, 2)]))
+    assert img.shape == (560, 560, 3) and (img != img[0, 0]).any()
 
 
 if __name__ == "__main__":

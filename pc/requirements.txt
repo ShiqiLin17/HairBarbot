@@ -2,3 +2,4 @@ flask>=3.0
 pyserial>=3.5
 numpy>=1.24
 opencv-python>=4.8   # face detection (pc/vision)
+mediapipe>=0.10.14   # face mesh that tracks turned heads (optional, falls back to YuNet)

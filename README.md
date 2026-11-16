@@ -37,8 +37,11 @@ pc/orientation.py              quaternion math, calibration (Kabsch), no-cut zon
 pc/styles.py                   hairstyles: length per region + fade (e.g. "Fade 2 cm -> 5 cm")
 pc/serial_link.py              serial protocol to the ESP32 + a full simulator (fake board + fake user)
 pc/vision/head_scalp.py        webcam: find the face, estimate head pose, draw where the scalp is
-pc/vision/head_profile.py      head sizes (ANSUR II female/male averages or your own measurement) + startup menu
-pc/tests/                      tests: full simulated haircut (test_sim.py), face/scalp estimate (test_vision.py)
+pc/vision/head_profile.py      head sizes (ANSUR II averages, your measurement, or a 3D scan) + startup menu
+pc/vision/face_mesh.py         MediaPipe 478-point face mesh (tracks turned heads)
+pc/vision/head_viewer.py       3D wireframe head viewer window
+pc/vision/head_scan.py         import a phone 3D scan (taken with a cap on) as a head profile
+pc/tests/                      tests: simulated haircut, face/scalp estimate, head sizes, scan import
 pc/live/                       Node.js + Socket.io live app: client app + operator dashboard
 docs/budget.xlsx               parts list + budget
 docs/build-book.html           drawings, parts to make, wiring, plan (open in a browser)
@@ -60,36 +63,54 @@ npm run demo          # starts the simulated controller + the live app
   Finish calibration (or "Skip calibration (sim)"). Then start a haircut from the client app.
 - Tests: `cd pc && python tests/test_sim.py` (about 2 minutes; one test runs a full haircut in real time).
 
-## 1b. Face and scalp detection (webcam)
+## 1b. Face, head and scalp (webcam + 3D)
 
 ```bash
 cd pc
-pip install opencv-python numpy
-python vision/head_scalp.py              # webcam; add --mirror to show it like a mirror
-python vision/head_scalp.py --image me.jpg
+python3 -m pip install opencv-python numpy mediapipe
+python3 vision/head_scalp.py --mirror
 ```
-Finds the face (OpenCV's YuNet detector, model included in `pc/vision/models`), fits an average 3D face to
-5 landmarks (eyes, nose, mouth corners) to get the head's **yaw / pitch / roll** and distance, then attaches a
-head-sized ellipsoid behind the face. The visible scalp (above the face/ear no-cut line) is drawn on the video,
-colored by the length the chosen style wants there (`--style fade25`), plus the estimated crown.
-Keys: `q` quit, `s` screenshot.
+- **Face tracking:** MediaPipe Face Landmarker finds 478 points on the face and keeps tracking with the head
+  turned about 60–70° either way. The face mesh is drawn on the video (key `m` toggles it). If MediaPipe isn't
+  installed it falls back to OpenCV's YuNet, which needs both eyes visible. The face model (~3.6 MB) downloads
+  automatically the first time.
+- **Head pose + scalp:** five mesh points (eyes, nose, mouth corners) give the head's yaw / pitch / roll and
+  distance. A head model is attached behind the face; the visible scalp above the face/ear no-cut line is drawn,
+  colored by the chosen style (`--style fade25`). If the face is lost for a moment, the last pose stays on screen.
+- **3D view:** press `v` for a separate window with a rotatable wireframe head and the live face mesh on it
+  (drag to turn, scroll to zoom). Or on its own: `python3 vision/head_viewer.py --sex female`.
+- Keys: `q` quit, `s` screenshot, `m` mesh, `v` 3D view.
 
-**Head size menu** (at startup): `1` female, `2` male, `3` personalized. Options 1 and 2 use median head sizes
-from **ANSUR II**, the 2012 U.S. Army anthropometric survey of 1,986 women and 4,082 men
-([data](https://www.openlab.psu.edu/datasets/ansur2/), Gordon et al., NATICK/TR-15/007):
+**What the camera can and can't do:** it measures the *face* surface. It can't see bone or the back of the head,
+so the skull shape is an **estimate** from the head-size menu, unless you use a 3D scan (below).
+
+**Head size menu** (at startup): `1` female, `2` male, `3` personalized, `4` saved 3D scan (if you have one).
+Options 1 and 2 use median head sizes from **ANSUR II**, the 2012 U.S. Army anthropometric survey of 1,986 women
+and 4,082 men ([data](https://www.openlab.psu.edu/datasets/ansur2/), Gordon et al., NATICK/TR-15/007):
 
 | | head circumference | head length | head width | ear to top of head |
 |---|---|---|---|---|
 | Female | 56.0 cm | 19.0 cm | 14.7 cm | 12.7 cm |
 | Male | 57.4 cm | 20.0 cm | 15.4 cm | 13.1 cm |
 
-Option 3 asks for your head circumference with units (`57 cm`, `22.5 in`, `570 mm`) and scales the average head
-to match. Skip the menu with `--sex female`, `--sex male` or `--head-circ "57 cm"`. If the scalp still sits off,
-try `--fov 70` (wider webcam).
-On a Mac, allow camera access for your terminal (System Settings → Privacy & Security → Camera).
+Option 3 asks for head circumference with units (`57 cm`, `22.5 in`, `570 mm`) and scales the average head.
+Skip the menu with `--sex female`, `--sex male`, `--head-circ "57 cm"` or `--scan vision/profiles/<name>.json`.
 
-Next step: feed the camera's head yaw into the controller, so the user no longer has to keep facing forward.
-`HeadScalpEstimator.estimate(frame)` returns the pose (`rvec`, `tvec`, `yaw`, `pitch`, `roll`).
+### Most accurate: a 3D head scan with a cap on
+
+Hair sits 1–5 cm above the scalp, so scanning hair gives the wrong shape. A thin **matte wig cap or swim cap**
+flattens it to a few mm and scans far better than shiny or wet hair.
+
+1. Put on the cap. Sit still, face relaxed, looking straight ahead.
+2. Scan with a phone app (Polycam, Scaniverse, …): walk slowly around the head about 30 cm away, covering the
+   top and back. Export as **OBJ, PLY or STL**.
+3. `python3 vision/head_scan.py my_scan.obj --name shiqi` → a 3D window opens. Check the orange hairline is at
+   the forehead and the face is at the front (`f` flips front/back, `[` `]` turn 5°), then `s` to save.
+4. The profile is saved to `pc/vision/profiles/shiqi.json` and shows up as option 4 in the menu.
+5. Take the cap off before cutting. The scan can be reused for later haircuts.
+
+The import subtracts 3 mm for the cap and flattened hair (`--cap`) and assumes the scan is upright with Y up,
+as phone AR scans are (`--up z` otherwise).
 
 ## 2. Electronics
 

@@ -10,9 +10,17 @@ How a profile becomes the 3D head model (an ellipsoid centered at ear height):
   side half-size       = head breadth / 2
   top half-size        = ear (tragion) to top of head
 A personalized profile scales the average of the two by the user's head circumference.
+A SCANNED profile (from a phone 3D scan with a cap on, see head_scan.py) replaces the ellipsoid with the
+real head shape: a grid of scalp radius over (yaw, pitch).
 """
+import glob
+import json
+import math
+import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+import numpy as np
 
 SOURCE = "ANSUR II (2012 U.S. Army anthropometric survey), medians"
 
@@ -30,6 +38,9 @@ UNIT_MM = {"mm": 1.0, "millimeter": 1.0, "millimeters": 1.0, "millimetre": 1.0, 
            "ft": 304.8, "foot": 304.8, "feet": 304.8, "'": 304.8}
 
 CIRC_MIN_MM, CIRC_MAX_MM = 450.0, 700.0   # adult head circumferences fall well inside this
+PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profiles")
+GRID_STEP = 5.0                            # degrees, for scanned head grids
+GRID_PITCH_MAX = 125.0
 
 
 @dataclass
@@ -39,6 +50,56 @@ class HeadProfile:
     breadth: float
     ear_to_top: float
     circumference: float
+    grid: list = field(default=None, repr=False)   # scanned scalp radius (mm): rows = pitch 0..125 step 5, cols = yaw -180..180 step 5
+
+    # ---- head surface (ellipsoid, or the scanned shape)
+    def radius(self, yaw, pitch):
+        """Distance (mm) from the head center to the scalp in direction (yaw, pitch)."""
+        if self.grid is None:
+            a, b, c = self.axes
+            d = _direction(yaw, pitch)
+            return 1.0 / math.sqrt((d[0] / a) ** 2 + (d[1] / b) ** 2 + (d[2] / c) ** 2)
+        g = self._g
+        fi = min(max(pitch, 0.0), GRID_PITCH_MAX) / GRID_STEP
+        fj = ((yaw + 180.0) % 360.0) / GRID_STEP
+        i0, j0 = int(math.floor(fi)), int(math.floor(fj))
+        i1, j1 = min(i0 + 1, g.shape[0] - 1), (j0 + 1) % (g.shape[1] - 1)
+        ti, tj = fi - i0, fj - j0
+        return float((1 - ti) * ((1 - tj) * g[i0, j0] + tj * g[i0, j1]) + ti * ((1 - tj) * g[i1, j0] + tj * g[i1, j1]))
+
+    def surface(self, yaw, pitch):
+        """Scalp point (mm, head frame) and its outward unit normal."""
+        p = _direction(yaw, pitch) * self.radius(yaw, pitch)
+        if self.grid is None:
+            a, b, c = self.axes
+            n = np.array([p[0] / a ** 2, p[1] / b ** 2, p[2] / c ** 2])
+        else:   # normal from two small steps along the surface
+            e = 2.0
+            pp = _direction(yaw, pitch + e) * self.radius(yaw, pitch + e)
+            if pitch < e:   # near the crown, yaw steps are degenerate: use the radial direction
+                n = p.copy()
+            else:
+                py = _direction(yaw + e, pitch) * self.radius(yaw + e, pitch)
+                n = np.cross(pp - p, py - p)
+                if n @ p < 0:
+                    n = -n
+        return p, n / (np.linalg.norm(n) or 1.0)
+
+    @property
+    def _g(self):
+        if not hasattr(self, "_grid_np"):
+            object.__setattr__(self, "_grid_np", np.asarray(self.grid, dtype=float))
+        return self._grid_np
+
+    def to_json(self):
+        return {"label": self.label, "length": self.length, "breadth": self.breadth, "ear_to_top": self.ear_to_top,
+                "circumference": self.circumference, "grid_step_deg": GRID_STEP, "grid": self.grid}
+
+    def save(self, path):
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(self.to_json(), f)
+        return path
 
     @property
     def axes(self):
@@ -53,6 +114,22 @@ class HeadProfile:
     def describe(self):
         return (f"{self.label}: circumference {self.circumference / 10:.1f} cm, length {self.length / 10:.1f} cm, "
                 f"width {self.breadth / 10:.1f} cm")
+
+
+def _direction(yaw, pitch):
+    y, p = math.radians(yaw), math.radians(pitch)
+    return np.array([math.sin(p) * math.cos(y), math.sin(p) * math.sin(y), math.cos(p)])
+
+
+def load_profile(path):
+    with open(path) as f:
+        d = json.load(f)
+    return HeadProfile(d.get("label", os.path.splitext(os.path.basename(path))[0]), d["length"], d["breadth"],
+                       d["ear_to_top"], d["circumference"], d.get("grid"))
+
+
+def saved_scans():
+    return sorted(glob.glob(os.path.join(PROFILE_DIR, "*.json")))
 
 
 def average_profile(sex):
@@ -97,8 +174,20 @@ def ask_head_profile(input_fn=input, print_fn=print):
     print_fn("  1. Female   (average head, ANSUR II)")
     print_fn("  2. Male     (average head, ANSUR II)")
     print_fn("  3. Personalized measurement (head circumference)")
+    scans = saved_scans()
+    if scans:
+        print_fn("  4. Saved 3D head scan (most accurate)")
+    options = "1, 2, 3 or 4" if scans else "1, 2 or 3"
     while True:
-        choice = input_fn("Choose 1, 2 or 3: ").strip()
+        choice = input_fn(f"Choose {options}: ").strip()
+        if choice == "4" and scans:
+            for k, path in enumerate(scans, 1):
+                print_fn(f"     {k}. {os.path.basename(path)}")
+            while True:
+                pick = input_fn("Which scan? ").strip() if len(scans) > 1 else "1"
+                if pick.isdigit() and 1 <= int(pick) <= len(scans):
+                    return load_profile(scans[int(pick) - 1])
+                print_fn(f"  Type a number from 1 to {len(scans)}.")
         if choice == "1":
             return average_profile("female")
         if choice == "2":
@@ -112,4 +201,4 @@ def ask_head_profile(input_fn=input, print_fn=print):
                     return personalized_profile(mm)
                 except ValueError as e:
                     print_fn(f"  {e}")
-        print_fn("  Please type 1, 2 or 3.")
+        print_fn(f"  Please type {options}.")

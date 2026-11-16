@@ -4,3 +4,6 @@ __pycache__/
 venv/
 .DS_Store
 node_modules/
+
+# downloaded at first run
+pc/vision/models/face_landmarker.task
