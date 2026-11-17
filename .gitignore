@@ -7,3 +7,10 @@ node_modules/
 
 # downloaded at first run
 pc/vision/models/face_landmarker.task
+
+# Xcode
+xcuserdata/
+DerivedData/
+*.xcuserstate
+build/
+.build/
