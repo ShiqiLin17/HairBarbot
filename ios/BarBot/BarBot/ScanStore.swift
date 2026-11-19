@@ -26,10 +26,16 @@ nonisolated struct SavedScan: Identifiable, Hashable, Sendable {
 
 enum ScanStoreError: LocalizedError {
     case writeFailed
+    case emptyName
+    case nameTaken(String)
+    case renameFailed
 
     var errorDescription: String? {
         switch self {
         case .writeFailed: "The scan could not be saved."
+        case .emptyName: "Please enter a name."
+        case .nameTaken(let name): "A scan named \"\(name)\" already exists."
+        case .renameFailed: "The scan could not be renamed."
         }
     }
 }
@@ -70,11 +76,13 @@ final class ScanStore {
             .sorted { $0.date > $1.date }
     }
 
-    /// Writes a point cloud to a new file named after the current time,
-    /// e.g. "scan-2026-11-19-143205.ply" or "merged-2026-11-19-143205.ply".
+    /// Writes a point cloud to a new file named after the current time and an optional
+    /// label, e.g. "scan-2026-11-19-143205-front.ply" or "merged-2026-11-19-143205.ply".
     @discardableResult
-    func save(_ pointCloud: SCPointCloud, prefix: String = "scan") throws -> URL {
-        let name = "\(prefix)-\(fileNameFormatter.string(from: Date())).ply"
+    func save(_ pointCloud: SCPointCloud, prefix: String = "scan", label: String? = nil) throws -> URL {
+        var name = "\(prefix)-\(fileNameFormatter.string(from: Date()))"
+        if let label, !label.isEmpty { name += "-\(label)" }
+        name += ".ply"
         let url = folder.appending(path: name)
         // StandardCyborg's own writer: positions, surface directions (normals),
         // colors, point sizes, and gravity ("which way is up").
@@ -82,6 +90,52 @@ final class ScanStore {
             throw ScanStoreError.writeFailed
         }
         reload()
+        return url
+    }
+
+    /// Writes a point cloud to a file with a name you chose, e.g. "bryson-front-cap.ply".
+    @discardableResult
+    func save(_ pointCloud: SCPointCloud, named name: String) throws -> URL {
+        let url = try urlForNewName(name)
+        guard pointCloud.writeToPLY(atPath: url.path) else {
+            throw ScanStoreError.writeFailed
+        }
+        reload()
+        return url
+    }
+
+    /// Gives a saved scan a new name (keeps its date and contents).
+    func rename(_ scan: SavedScan, to name: String) throws {
+        let cleaned = Self.cleanName(name)
+        guard cleaned != scan.name else { return }
+        let url = try urlForNewName(cleaned)
+        do {
+            try FileManager.default.moveItem(at: scan.url, to: url)
+        } catch {
+            throw ScanStoreError.renameFailed
+        }
+        reload()
+    }
+
+    /// Makes a typed name safe to use as a file name: trims spaces, replaces
+    /// characters files can't have (/ and :), and drops a ".ply" you may have typed.
+    static func cleanName(_ name: String) -> String {
+        var cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.lowercased().hasSuffix(".ply") { cleaned = String(cleaned.dropLast(4)) }
+        cleaned = cleaned.replacingOccurrences(of: "/", with: "-")
+                         .replacingOccurrences(of: ":", with: "-")
+        while cleaned.hasPrefix(".") { cleaned.removeFirst() }  // no hidden files
+        return cleaned.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// The file URL for a new name, after checking it's not empty or already used.
+    private func urlForNewName(_ name: String) throws -> URL {
+        let cleaned = Self.cleanName(name)
+        guard !cleaned.isEmpty else { throw ScanStoreError.emptyName }
+        let url = folder.appending(path: "\(cleaned).ply")
+        guard !FileManager.default.fileExists(atPath: url.path) else {
+            throw ScanStoreError.nameTaken(cleaned)
+        }
         return url
     }
 
