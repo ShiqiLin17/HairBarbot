@@ -6,6 +6,28 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		5C0000000000000000000A01 /* StandardCyborgFusion in Frameworks */ = {isa = PBXBuildFile; productRef = 5C0000000000000000000B01 /* StandardCyborgFusion */; };
+		5C0000000000000000000A02 /* StandardCyborgUI in Frameworks */ = {isa = PBXBuildFile; productRef = 5C0000000000000000000B02 /* StandardCyborgUI */; };
+		5C0000000000000000000A03 /* StandardCyborgFusion in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 5C0000000000000000000B01 /* StandardCyborgFusion */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		5C0000000000000000000A04 /* StandardCyborgUI in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 5C0000000000000000000B02 /* StandardCyborgUI */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		5C0000000000000000000C01 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				5C0000000000000000000A03 /* StandardCyborgFusion in Embed Frameworks */,
+				5C0000000000000000000A04 /* StandardCyborgUI in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		B01AE19E30ACBE300041765E /* BarBot.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BarBot.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -23,6 +45,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5C0000000000000000000A01 /* StandardCyborgFusion in Frameworks */,
+				5C0000000000000000000A02 /* StandardCyborgUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -55,6 +79,7 @@
 				B01AE19A30ACBE300041765E /* Sources */,
 				B01AE19B30ACBE300041765E /* Frameworks */,
 				B01AE19C30ACBE300041765E /* Resources */,
+				5C0000000000000000000C01 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -65,6 +90,8 @@
 			);
 			name = BarBot;
 			packageProductDependencies = (
+				5C0000000000000000000B01 /* StandardCyborgFusion */,
+				5C0000000000000000000B02 /* StandardCyborgUI */,
 			);
 			productName = BarBot;
 			productReference = B01AE19E30ACBE300041765E /* BarBot.app */;
@@ -94,6 +121,10 @@
 			);
 			mainGroup = B01AE19530ACBE300041765E;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				5C0000000000000000000D01 /* XCLocalSwiftPackageReference "../Vendor/StandardCyborgCocoa" */,
+				5C0000000000000000000D02 /* XCLocalSwiftPackageReference "../Vendor/StandardCyborgCocoa/StandardCyborgUI" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B01AE19F30ACBE300041765E /* Products */;
 			projectDirPath = "";
@@ -334,6 +365,30 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		5C0000000000000000000D01 /* XCLocalSwiftPackageReference "../Vendor/StandardCyborgCocoa" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Vendor/StandardCyborgCocoa;
+		};
+		5C0000000000000000000D02 /* XCLocalSwiftPackageReference "../Vendor/StandardCyborgCocoa/StandardCyborgUI" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Vendor/StandardCyborgCocoa/StandardCyborgUI;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		5C0000000000000000000B01 /* StandardCyborgFusion */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5C0000000000000000000D01 /* XCLocalSwiftPackageReference "../Vendor/StandardCyborgCocoa" */;
+			productName = StandardCyborgFusion;
+		};
+		5C0000000000000000000B02 /* StandardCyborgUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5C0000000000000000000D02 /* XCLocalSwiftPackageReference "../Vendor/StandardCyborgCocoa/StandardCyborgUI" */;
+			productName = StandardCyborgUI;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = B01AE19630ACBE300041765E /* Project object */;
 }

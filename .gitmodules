@@ -1,0 +1,3 @@
+[submodule "ios/Vendor/StandardCyborgCocoa"]
+	path = ios/Vendor/StandardCyborgCocoa
+	url = https://github.com/brysonmedd/StandardCyborgCocoa.git
