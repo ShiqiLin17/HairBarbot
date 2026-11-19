@@ -103,6 +103,12 @@ nonisolated final class DepthWorker: NSObject, AVCaptureDepthDataOutputDelegate,
     private var frameCount = 0
 
     func start() throws {
+        // Already set up earlier (e.g. you switched tabs and came back): just restart.
+        if !session.inputs.isEmpty {
+            queue.async { self.session.startRunning() }
+            return
+        }
+
         // 1. Find the front TrueDepth camera.
         guard let camera = AVCaptureDevice.default(.builtInTrueDepthCamera, for: .video, position: .front) else {
             throw DepthCameraError.noTrueDepthCamera
