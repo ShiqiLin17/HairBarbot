@@ -170,6 +170,9 @@ struct SavedScanScreen: View {
     var body: some View {
         if let pointCloud = store.load(scan) {
             SavedScanPreview(pointCloud: pointCloud, onClose: onClose)
+                .overlay(alignment: .top) {
+                    gravityLabel(pointCloud.gravity)
+                }
         } else {
             VStack(spacing: 16) {
                 Text("Couldn't open \(scan.name).")
@@ -177,6 +180,18 @@ struct SavedScanScreen: View {
                     .buttonStyle(.borderedProminent)
             }
         }
+    }
+
+    /// The scan's recorded gravity: which way "down" was when the scan started,
+    /// in the phone's directions (x = right, y = up, z = toward you).
+    /// Phone held upright facing the object ≈ (0.00, -1.00, 0.00).
+    private func gravityLabel(_ g: SIMD3<Float>) -> some View {
+        Text(String(format: "gravity  x %.2f   y %.2f   z %.2f", g.x, g.y, g.z))
+            .font(.footnote.monospacedDigit())
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.ultraThinMaterial, in: Capsule())
+            .padding(.top, 60)
     }
 }
 
