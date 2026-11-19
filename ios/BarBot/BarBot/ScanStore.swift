@@ -13,8 +13,8 @@ import Foundation
 import Observation
 import StandardCyborgFusion
 
-/// One saved scan file.
-struct SavedScan: Identifiable, Hashable {
+/// One saved scan file. Plain data, so usable from any thread (e.g. during a merge).
+nonisolated struct SavedScan: Identifiable, Hashable, Sendable {
     let url: URL
     let date: Date
     let sizeBytes: Int
@@ -70,10 +70,11 @@ final class ScanStore {
             .sorted { $0.date > $1.date }
     }
 
-    /// Writes a finished scan to a new file named after the current time.
+    /// Writes a point cloud to a new file named after the current time,
+    /// e.g. "scan-2026-11-19-143205.ply" or "merged-2026-11-19-143205.ply".
     @discardableResult
-    func save(_ pointCloud: SCPointCloud) throws -> URL {
-        let name = "scan-\(fileNameFormatter.string(from: Date())).ply"
+    func save(_ pointCloud: SCPointCloud, prefix: String = "scan") throws -> URL {
+        let name = "\(prefix)-\(fileNameFormatter.string(from: Date())).ply"
         let url = folder.appending(path: name)
         // StandardCyborg's own writer: positions, surface directions (normals),
         // colors, point sizes, and gravity ("which way is up").

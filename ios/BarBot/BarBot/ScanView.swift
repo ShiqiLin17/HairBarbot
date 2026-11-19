@@ -18,6 +18,9 @@ struct ScanView: View {
     @State private var store = ScanStore()
     @State private var isScanning = false
     @State private var viewing: SavedScan?
+    @State private var showingMergeSheet = false
+    @State private var pendingMerge: MergeOutcome?
+    @State private var mergeResult: MergeOutcome?
 
     var body: some View {
         NavigationStack {
@@ -53,6 +56,28 @@ struct ScanView: View {
             }
             .navigationTitle("Scan")
             .refreshable { store.reload() }
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showingMergeSheet = true
+                    } label: {
+                        Label("Merge", systemImage: "square.on.square")
+                    }
+                    .disabled(store.scans.count < 2)
+                }
+            }
+        }
+        .sheet(isPresented: $showingMergeSheet, onDismiss: {
+            // Show the result once the picker sheet has fully closed
+            if let outcome = pendingMerge {
+                pendingMerge = nil
+                mergeResult = outcome
+            }
+        }) {
+            MergeSheet(store: store, onMerged: { pendingMerge = $0 })
+        }
+        .fullScreenCover(item: $mergeResult) { outcome in
+            MergeResultScreen(outcome: outcome, store: store, onClose: { mergeResult = nil })
         }
         .fullScreenCover(isPresented: $isScanning) {
             ScanningScreen(store: store, onClose: { isScanning = false })
