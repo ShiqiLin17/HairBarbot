@@ -2,11 +2,11 @@
 //  ScanView.swift
 //  BarBot
 //
-//  The Scan tab. For now it shows StandardCyborg's own scanning screen,
-//  unchanged, then their 3D preview of the result.
+//  The Scan tab: start a scan, and see / share / delete saved scans.
 //
-//  StandardCyborg's screens are built with UIKit (Apple's older UI system),
-//  so ScanningScreen below is a small adapter that lets SwiftUI show them.
+//  Scanning uses StandardCyborg's own screens (unchanged for now).
+//  They are built with UIKit (Apple's older UI system), so the small
+//  "adapter" structs at the bottom let SwiftUI show them.
 //
 
 import SwiftUI
@@ -15,50 +15,95 @@ import StandardCyborgFusion
 import StandardCyborgUI
 
 struct ScanView: View {
+    @State private var store = ScanStore()
     @State private var isScanning = false
+    @State private var viewing: SavedScan?
 
     var body: some View {
-        VStack(spacing: 20) {
-            Spacer()
-            Image(systemName: "cube.transparent")
-                .font(.system(size: 64))
-                .foregroundStyle(.secondary)
-            Text("3D Scan")
-                .font(.title)
-            Text("Tap the round button to start (3-2-1 countdown).\nTap it again to finish.")
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button {
-                isScanning = true
-            } label: {
-                Label("Start Scan", systemImage: "viewfinder")
-                    .font(.title2)
-                    .frame(maxWidth: .infinity)
+        NavigationStack {
+            List {
+                Section {
+                    Button {
+                        isScanning = true
+                    } label: {
+                        Label("Start Scan", systemImage: "viewfinder")
+                            .font(.title2)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets())
+                } footer: {
+                    Text("Tap the round button to start (3-2-1 countdown), and again to finish. Then tap Save.")
+                }
+
+                Section("Saved scans (\(store.scans.count))") {
+                    if store.scans.isEmpty {
+                        Text("No scans yet.")
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(store.scans) { scan in
+                        row(for: scan)
+                    }
+                    .onDelete { offsets in
+                        for index in offsets { store.delete(store.scans[index]) }
+                    }
+                }
             }
-            .buttonStyle(.borderedProminent)
+            .navigationTitle("Scan")
+            .refreshable { store.reload() }
         }
-        .padding()
         .fullScreenCover(isPresented: $isScanning) {
-            ScanningScreen(onClose: { isScanning = false })
+            ScanningScreen(store: store, onClose: { isScanning = false })
                 .ignoresSafeArea()
+        }
+        .fullScreenCover(item: $viewing) { scan in
+            SavedScanScreen(scan: scan, store: store, onClose: { viewing = nil })
+                .ignoresSafeArea()
+        }
+    }
+
+    /// One saved scan: tap to view in 3D, share button to AirDrop, swipe to delete.
+    private func row(for scan: SavedScan) -> some View {
+        HStack {
+            Button {
+                viewing = scan
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(scan.name)
+                        .font(.body.monospacedDigit())
+                    Text("\(scan.date.formatted(date: .abbreviated, time: .shortened)) · \(scan.sizeBytes.formatted(.byteCount(style: .file)))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .tint(.primary)
+            Spacer()
+            ShareLink(item: scan.url) {
+                Image(systemName: "square.and.arrow.up")
+            }
+            .buttonStyle(.borderless)
         }
     }
 }
 
-/// Adapter: shows StandardCyborg's ScanningViewController inside SwiftUI.
+// MARK: - Adapters for StandardCyborg's UIKit screens
+
+/// Shows StandardCyborg's scanning screen, then their 3D preview with Rescan / Save.
 struct ScanningScreen: UIViewControllerRepresentable {
-    /// Called when the person is finished (cancel, or Done on the preview).
+    let store: ScanStore
+    /// Called when the person is finished (cancel, or after saving).
     let onClose: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onClose: onClose)
+        Coordinator(store: store, onClose: onClose)
     }
 
     func makeUIViewController(context: Context) -> ScanningViewController {
         let scanner = ScanningViewController()
         scanner.delegate = context.coordinator
-        scanner.generatesTexturedMeshes = true  // color the 3D result, like the example app
+        scanner.generatesTexturedMeshes = true  // color the 3D preview, like the example app
         return scanner
     }
 
@@ -66,9 +111,11 @@ struct ScanningScreen: UIViewControllerRepresentable {
 
     /// Receives messages from the scanning screen ("cancelled", "here is the scan").
     final class Coordinator: NSObject, ScanningViewControllerDelegate {
+        let store: ScanStore
         let onClose: () -> Void
 
-        init(onClose: @escaping () -> Void) {
+        init(store: ScanStore, onClose: @escaping () -> Void) {
+            self.store = store
             self.onClose = onClose
         }
 
@@ -84,16 +131,27 @@ struct ScanningScreen: UIViewControllerRepresentable {
                                                      landmarks: nil)
             preview.leftButton.setTitle("Rescan", for: .normal)
             preview.leftButton.backgroundColor = .systemOrange
-            preview.rightButton.setTitle("Done", for: .normal)
-            preview.rightButton.backgroundColor = .systemBlue
+            preview.rightButton.setTitle("Save", for: .normal)
+            preview.rightButton.backgroundColor = .systemGreen
 
             // Rescan: close the preview; the scanner restarts its camera when it reappears.
             preview.leftButton.addAction(UIAction { [weak controller] _ in
                 controller?.dismiss(animated: false)
             }, for: .touchUpInside)
-            // Done: close everything and go back to the Scan tab.
-            preview.rightButton.addAction(UIAction { [weak self] _ in
-                self?.onClose()
+
+            // Save: write the scan to a PLY file, then go back to the Scan tab.
+            preview.rightButton.addAction(UIAction { [weak self, weak preview] _ in
+                guard let self else { return }
+                do {
+                    try self.store.save(pointCloud)
+                    self.onClose()
+                } catch {
+                    let alert = UIAlertController(title: "Save failed",
+                                                  message: error.localizedDescription,
+                                                  preferredStyle: .alert)
+                    alert.addAction(UIAlertAction(title: "OK", style: .default))
+                    preview?.present(alert, animated: true)
+                }
             }, for: .touchUpInside)
 
             // Full screen, so the scanner gets told when it is visible again (for Rescan).
@@ -101,4 +159,39 @@ struct ScanningScreen: UIViewControllerRepresentable {
             controller.present(preview, animated: false)
         }
     }
+}
+
+/// Opens a saved scan file in StandardCyborg's 3D preview.
+struct SavedScanScreen: View {
+    let scan: SavedScan
+    let store: ScanStore
+    let onClose: () -> Void
+
+    var body: some View {
+        if let pointCloud = store.load(scan) {
+            SavedScanPreview(pointCloud: pointCloud, onClose: onClose)
+        } else {
+            VStack(spacing: 16) {
+                Text("Couldn't open \(scan.name).")
+                Button("Close", action: onClose)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+    }
+}
+
+struct SavedScanPreview: UIViewControllerRepresentable {
+    let pointCloud: SCPointCloud
+    let onClose: () -> Void
+
+    func makeUIViewController(context: Context) -> ScenePreviewViewController {
+        let preview = ScenePreviewViewController(pointCloud: pointCloud, meshTexturing: nil, landmarks: nil)
+        preview.leftButton.isHidden = true
+        preview.rightButton.setTitle("Close", for: .normal)
+        preview.rightButton.backgroundColor = .systemBlue
+        preview.rightButton.addAction(UIAction { _ in onClose() }, for: .touchUpInside)
+        return preview
+    }
+
+    func updateUIViewController(_ preview: ScenePreviewViewController, context: Context) {}
 }
