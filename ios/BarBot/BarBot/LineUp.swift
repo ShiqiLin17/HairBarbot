@@ -36,6 +36,8 @@ nonisolated struct LineUp: Codable, Hashable, Sendable {
     /// For each mask point: its spot on the head (x, y, z; head space) and whether it was used.
     var matchedHeadPoints: [Float]
     var matchedFlags: [UInt8]
+    /// How much the head moved compared with the line-up before this one (nil for the first).
+    var change: LineUpChange?
 
     var faceToHeadMatrix: simd_float4x4 {
         guard faceToHead.count == 16 else { return matrix_identity_float4x4 }
@@ -48,6 +50,38 @@ nonisolated struct LineUp: Codable, Hashable, Sendable {
 
     /// Head space → Apple face space.
     var headToFaceMatrix: simd_float4x4 { faceToHeadMatrix.inverse }
+}
+
+/// How far apart two line-ups put the same head: millimeters at the nose tip, the back of
+/// the head and the top of the head, and the turn between them in degrees.
+nonisolated struct LineUpChange: Codable, Hashable, Sendable {
+    var noseMillimeters: Float
+    var backMillimeters: Float
+    var topMillimeters: Float
+    var degrees: Float
+
+    /// Compares where two line-ups place the head's nose tip, back and top (relative to Apple's face).
+    static func between(_ old: LineUp, _ new: LineUp, mesh: HeadMesh) -> LineUpChange {
+        var nose = SIMD3<Float>(0, 0, -.greatestFiniteMagnitude)
+        var back = SIMD3<Float>(0, 0, .greatestFiniteMagnitude)
+        var top = SIMD3<Float>(0, -.greatestFiniteMagnitude, 0)
+        for i in stride(from: 0, to: mesh.vertices.count, by: 3) {
+            let p = SIMD3(mesh.vertices[i], mesh.vertices[i + 1], mesh.vertices[i + 2])
+            if p.z > nose.z { nose = p }
+            if p.z < back.z { back = p }
+            if p.y > top.y { top = p }
+        }
+        let a = old.headToFaceMatrix, b = new.headToFaceMatrix
+        func moved(_ p: SIMD3<Float>) -> Float {
+            let pa = a * SIMD4(p, 1), pb = b * SIMD4(p, 1)
+            return simd_length(SIMD3(pa.x - pb.x, pa.y - pb.y, pa.z - pb.z)) * 1000
+        }
+        let relative = old.faceToHeadMatrix * b
+        let trace = relative.columns.0.x + relative.columns.1.y + relative.columns.2.z
+        let degrees = acos(max(-1, min(1, (trace - 1) / 2))) * 180 / .pi
+        return LineUpChange(noseMillimeters: moved(nose), backMillimeters: moved(back),
+                            topMillimeters: moved(top), degrees: degrees)
+    }
 }
 
 /// Adds up mask frames while the line-up is collecting.

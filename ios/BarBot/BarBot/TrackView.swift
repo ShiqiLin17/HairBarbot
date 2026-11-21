@@ -5,7 +5,9 @@
 //  The Track tab: Apple's face tracking (ARKit) on the front 3D camera.
 //  Shows the camera picture with Apple's face mask drawn on it, and the live
 //  head pose relative to the phone. With a saved head chosen, "Line Up" snaps
-//  Apple's mask onto that head's face (see LineUp.swift).
+//  Apple's mask onto that head's face (see LineUp.swift). After that, the whole
+//  head is drawn on the picture and its pose is shown (option A: Apple's face
+//  pose plus the fixed line-up offset).
 //
 //  "Phone space" (all poses here are measured in it), with the phone upright
 //  (portrait) and you looking at the screen:
@@ -69,6 +71,9 @@ final class TrackState {
     /// Face updates per second (Apple's tracking aims for 60).
     var updatesPerSecond: Double = 0
     var showMask = true
+    var showHead = true
+    /// How solid the drawn head is (0 = invisible, 1 = solid).
+    var headOpacity: Double = 0.3
 
     var lineUpPhase: LineUpPhase = .idle
     /// Set while collecting mask frames for a line-up.
@@ -88,6 +93,8 @@ struct TrackView: View {
     @State private var state = TrackState()
     @State private var isVisible = false
     @State private var message: (title: String, text: String)?
+    /// The chosen head rebuilt as a mesh (for drawing it and comparing line-ups).
+    @State private var mesh: HeadMesh?
 
     /// The chosen saved head (re-read from the store so a new line-up shows up).
     private var head: SavedHead? { heads.heads.first { $0.name == headName } }
@@ -100,7 +107,10 @@ struct TrackView: View {
                     .foregroundStyle(.white)
                     .padding()
             } else if isVisible {
-                FaceTrackingView(state: state)
+                FaceTrackingView(state: state,
+                                 headMesh: head?.lineUp == nil ? nil : mesh,
+                                 headKey: head.map { "\($0.name)|\($0.lineUp?.created.timeIntervalSince1970 ?? 0)" },
+                                 headToFace: head?.lineUp?.headToFaceMatrix)
                     .ignoresSafeArea()
             }
             VStack {
@@ -126,6 +136,11 @@ struct TrackView: View {
             state.status = .starting
             state.collector = nil
             state.lineUpPhase = .idle
+        }
+        .task(id: headName) {
+            mesh = nil
+            guard let head else { return }
+            mesh = try? await Task.detached(priority: .userInitiated) { try HeadMesh.build(head) }.value
         }
         .alert(message?.title ?? "", isPresented: Binding(get: { message != nil },
                                                           set: { if !$0 { message = nil } })) {
@@ -161,11 +176,23 @@ struct TrackView: View {
             }
             if let lineUp = head?.lineUp {
                 Divider()
+                if let pose = state.pose, state.status == .tracking {
+                    let headPose = HeadPose(transform: pose.transform * lineUp.faceToHeadMatrix.inverse)
+                    let a = headPose.angles
+                    let p = headPose.position * 100
+                    Text(String(format: "head  turn %+5.1f°  nod %+5.1f°  tilt %+5.1f°", a.turn, a.nod, a.tilt))
+                    Text(String(format: "head center  x %+5.1f  y %+5.1f  z %+5.1f cm", p.x, p.y, p.z))
+                        .foregroundStyle(.secondary)
+                }
                 Text(String(format: "line-up error %.1f mm   %d of %d points",
                             lineUp.rmsError * 1000, lineUp.usedPoints, lineUp.totalPoints))
                 Text("lined up \(lineUp.created.formatted(date: .abbreviated, time: .shortened))"
                      + String(format: " · moved %.1f mm / %.1f°", lineUp.movedMillimeters, lineUp.movedDegrees))
                     .foregroundStyle(.secondary)
+                if let change = lineUp.change {
+                    Text(changeText(change))
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .font(.callout.monospacedDigit())
@@ -232,6 +259,18 @@ struct TrackView: View {
 
                 Toggle("Mask", isOn: $state.showMask)
                     .toggleStyle(.button)
+                Toggle("Head", isOn: $state.showHead)
+                    .toggleStyle(.button)
+                    .disabled(head?.lineUp == nil)
+            }
+
+            if head?.lineUp != nil && state.showHead {
+                HStack {
+                    Image(systemName: "circle.dotted")
+                    Slider(value: $state.headOpacity, in: 0.05...1)
+                    Image(systemName: "circle.fill")
+                }
+                .foregroundStyle(.secondary)
             }
 
             Button {
@@ -310,17 +349,27 @@ struct TrackView: View {
                            text: "Only \(lineUp.usedPoints) mask points landed on the head's face. Is this the right head?")
                     return
                 }
+                var newLineUp = lineUp
+                if let previous = head.lineUp, let mesh {
+                    newLineUp.change = LineUpChange.between(previous, lineUp, mesh: mesh)
+                }
                 var updated = head
-                updated.lineUp = lineUp
+                updated.lineUp = newLineUp
                 try heads.update(updated)
-                finish(title: "Lined Up",
-                       text: String(format: "Line-up error %.1f mm, using %d of %d mask points (%d rounds).",
-                                    lineUp.rmsError * 1000, lineUp.usedPoints, lineUp.totalPoints,
-                                    lineUp.iterations))
+                var text = String(format: "Line-up error %.1f mm, using %d of %d mask points (%d rounds).",
+                                  lineUp.rmsError * 1000, lineUp.usedPoints, lineUp.totalPoints,
+                                  lineUp.iterations)
+                if let change = newLineUp.change { text += "\n\n" + changeText(change) }
+                finish(title: "Lined Up", text: text)
             } catch {
                 finish(title: "Line-Up Failed", text: error.localizedDescription)
             }
         }
+    }
+
+    private func changeText(_ change: LineUpChange) -> String {
+        String(format: "vs previous: nose %.1f mm, back %.1f mm, top %.1f mm, %.1f°",
+               change.noseMillimeters, change.backMillimeters, change.topMillimeters, change.degrees)
     }
 
     private func finish(title: String, text: String) {
@@ -334,6 +383,11 @@ struct TrackView: View {
 /// Apple's AR view, running face tracking, with the face mask drawn on the face.
 struct FaceTrackingView: UIViewRepresentable {
     let state: TrackState
+    /// The lined-up head to draw (nil = none), a key that changes when it or its line-up
+    /// changes, and where it sits relative to Apple's face (head space → face space).
+    let headMesh: HeadMesh?
+    let headKey: String?
+    let headToFace: simd_float4x4?
 
     func makeCoordinator() -> Coordinator { Coordinator(state: state) }
 
@@ -352,6 +406,8 @@ struct FaceTrackingView: UIViewRepresentable {
 
     func updateUIView(_ view: ARSCNView, context: Context) {
         context.coordinator.maskVisible = state.showMask
+        context.coordinator.setHead(mesh: headMesh, key: headKey, headToFace: headToFace,
+                                    visible: state.showHead, opacity: state.headOpacity)
     }
 
     static func dismantleUIView(_ view: ARSCNView, coordinator: Coordinator) {
@@ -362,8 +418,34 @@ struct FaceTrackingView: UIViewRepresentable {
         let state: TrackState
         /// Read by SceneKit's drawing thread.
         nonisolated(unsafe) var maskVisible = true
+        /// The node that follows Apple's face (made on SceneKit's thread), and the head drawn in it.
+        nonisolated(unsafe) var faceNode: SCNNode?
+        nonisolated(unsafe) var headNode: SCNNode?
+        private var headKey: String?
 
         init(state: TrackState) { self.state = state }
+
+        /// Puts the lined-up head inside the face node, so it moves with Apple's face pose.
+        func setHead(mesh: HeadMesh?, key: String?, headToFace: simd_float4x4?, visible: Bool, opacity: Double) {
+            let wanted = mesh == nil ? nil : key
+            if wanted != headKey {
+                headKey = wanted
+                headNode?.removeFromParentNode()
+                headNode = nil
+                if let mesh {
+                    let node = HeadFitSceneView.headNode(vertices: mesh.vertices, triangles: mesh.triangles,
+                                                         transparency: 0.5)
+                    node.renderingOrder = 10
+                    headNode = node
+                    faceNode?.addChildNode(node)
+                }
+            }
+            if let headNode {
+                headNode.simdTransform = headToFace ?? matrix_identity_float4x4
+                headNode.isHidden = !visible || headToFace == nil
+                headNode.geometry?.firstMaterial?.transparency = CGFloat(opacity)
+            }
+        }
 
         /// Expressions that change the face's shape; if any is strong, the face isn't relaxed.
         nonisolated private static let expressionKeys: [ARFaceAnchor.BlendShapeLocation] = [
@@ -415,14 +497,21 @@ struct FaceTrackingView: UIViewRepresentable {
             material?.fillMode = .lines
             material?.diffuse.contents = UIColor.white.withAlphaComponent(0.8)
             material?.lightingModel = .constant
-            return SCNNode(geometry: geometry)
+            let container = SCNNode()
+            container.addChildNode(SCNNode(geometry: geometry))
+            if let headNode { container.addChildNode(headNode) }
+            faceNode = container
+            return container
         }
 
         nonisolated func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
             guard let face = anchor as? ARFaceAnchor,
-                  let geometry = node.geometry as? ARSCNFaceGeometry else { return }
+                  let maskNode = node.childNodes.first(where: { $0.geometry is ARSCNFaceGeometry }),
+                  let geometry = maskNode.geometry as? ARSCNFaceGeometry else { return }
             geometry.update(from: face.geometry)
-            node.isHidden = !maskVisible
+            maskNode.isHidden = !maskVisible
+            // (Re)attach the head if it was made before this face node existed
+            if let headNode, headNode.parent !== node { node.addChildNode(headNode) }
         }
     }
 }
