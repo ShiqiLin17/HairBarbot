@@ -84,6 +84,9 @@ struct HeadFitScreen: View {
     @State private var showHead = true
     @State private var showPoints = true
     @State private var savedMessage: String?
+    @State private var namingForTracking = false
+    @State private var trackingName = ""
+    @Environment(HeadStore.self) private var heads
 
     /// What's on screen: the fit itself, or the test against another scan.
     private var shown: HeadFit? { showingTest ? test : fit }
@@ -115,9 +118,28 @@ struct HeadFitScreen: View {
                     Button("Close", action: onClose)
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button("Save Head", action: saveHead)
-                        .disabled(fit == nil)
+                    Menu("Save") {
+                        Button {
+                            trackingName = scan.name
+                            namingForTracking = true
+                        } label: {
+                            Label("Use for Tracking…", systemImage: "face.dashed")
+                        }
+                        Button(action: saveHead) {
+                            Label("Export OBJ", systemImage: "square.and.arrow.down")
+                        }
+                    }
+                    .disabled(fit == nil)
                 }
+            }
+            .alert("Save Head for Tracking", isPresented: $namingForTracking) {
+                TextField("Name", text: $trackingName)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                Button("Save") { saveForTracking() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Saves this head's shape (not the scan's tilt). A head with the same name is replaced.")
             }
             .sheet(isPresented: $choosingTestScan) {
                 TestScanPicker(store: store, excluding: scan) { picked in
@@ -255,6 +277,19 @@ struct HeadFitScreen: View {
         }
     }
 
+    /// Saves the fitted shape (not the test's) as a head for tracking.
+    private func saveForTracking() {
+        guard let fit else { return }
+        do {
+            let replaced = heads.exists(named: trackingName)
+            let head = try heads.save(fit.result, from: scan, named: trackingName)
+            savedMessage = "Saved head \"\(head.name)\"" + (replaced ? " (replaced the old one)." : ".")
+                + " It's listed under Saved heads in the Scan tab."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     /// Writes the fitted head as an OBJ mesh to Documents/Heads (visible in the Files app).
     private func saveHead() {
         guard let fit else { return }
@@ -339,7 +374,7 @@ struct HeadFitSceneView: UIViewRepresentable {
         root.simdPosition = -center
         scene.rootNode.addChildNode(root)
 
-        if showHead { root.addChildNode(headNode(vertices: vertices, triangles: triangles)) }
+        if showHead { root.addChildNode(Self.headNode(vertices: vertices, triangles: triangles)) }
         if showPoints { root.addChildNode(pointsNode()) }
 
         // Camera in front of the scan (scans look along -z from the camera at the origin)
@@ -352,7 +387,8 @@ struct HeadFitSceneView: UIViewRepresentable {
         return scene
     }
 
-    private func headNode(vertices: [Float], triangles: [UInt32]) -> SCNNode {
+    /// A head mesh in skin color with smooth shading. `transparency` 1 = solid.
+    static func headNode(vertices: [Float], triangles: [UInt32], transparency: CGFloat = 0.55) -> SCNNode {
         let count = vertices.count / 3
         var positions = [SCNVector3]()
         positions.reserveCapacity(count)
@@ -379,7 +415,7 @@ struct HeadFitSceneView: UIViewRepresentable {
                                    elements: [SCNGeometryElement(indices: triangles, primitiveType: .triangles)])
         let material = SCNMaterial()
         material.diffuse.contents = UIColor(red: 0.93, green: 0.76, blue: 0.66, alpha: 1)
-        material.transparency = 0.55
+        material.transparency = transparency
         material.isDoubleSided = true
         material.lightingModel = .blinn
         geometry.materials = [material]
@@ -421,9 +457,112 @@ struct HeadFitSceneView: UIViewRepresentable {
     }
 }
 
-// MARK: - Helpers
+// MARK: - Saved head viewer
 
-private extension Data {
-    var floats: [Float] { withUnsafeBytes { Array($0.bindMemory(to: Float.self)) } }
-    var uint32s: [UInt32] { withUnsafeBytes { Array($0.bindMemory(to: UInt32.self)) } }
+/// Shows a saved head, rebuilt from its shape numbers, in head space (facing you).
+struct SavedHeadScreen: View {
+    let head: SavedHead
+    let onClose: () -> Void
+
+    @State private var mesh: HeadMesh?
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color(.systemBackground).ignoresSafeArea()
+                if let mesh {
+                    HeadMeshSceneView(mesh: mesh)
+                        .ignoresSafeArea(edges: .bottom)
+                }
+                VStack {
+                    info.padding(.horizontal)
+                    Spacer()
+                    if let errorMessage {
+                        Text(errorMessage).foregroundStyle(.red).padding()
+                    }
+                    Spacer()
+                }
+            }
+            .navigationTitle(head.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close", action: onClose)
+                }
+            }
+        }
+        .task {
+            let head = head
+            do {
+                mesh = try await Task.detached(priority: .userInitiated) { try HeadMesh.build(head) }.value
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private var info: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("from \(head.sourceScan)")
+            Text("saved \(head.created.formatted(date: .abbreviated, time: .shortened))")
+            Text("fit  rms \(mm(head.fitRms))   face \(mm(head.faceRms))   scalp \(mm(head.scalpRms))")
+            if let mesh {
+                let size = mesh.size * 100
+                Text(String(format: "model size  width %.1f cm   height %.1f cm   depth %.1f cm",
+                            size.x, size.y, size.z))
+            }
+            Text(String(format: "shape: %d numbers, how unusual %.2f (0 = average head)",
+                        head.shape.count, unusualness))
+                .foregroundStyle(.secondary)
+        }
+        .font(.caption.monospacedDigit())
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// Root-mean-square of the shape numbers: ~0 for an average head, ~1 for a typical person.
+    private var unusualness: Float {
+        guard !head.shape.isEmpty else { return 0 }
+        return (head.shape.reduce(0) { $0 + $1 * $1 } / Float(head.shape.count)).squareRoot()
+    }
+
+    private func mm(_ meters: Float?) -> String {
+        guard let meters, meters.isFinite else { return "—" }
+        return String(format: "%.1f mm", meters * 1000)
+    }
+}
+
+/// A head mesh alone, front view, drag to rotate.
+struct HeadMeshSceneView: UIViewRepresentable {
+    let mesh: HeadMesh
+
+    func makeUIView(context: Context) -> SCNView {
+        let view = SCNView()
+        let scene = SCNScene()
+        var center = SIMD3<Float>(0, 0, 0)
+        for i in stride(from: 0, to: mesh.vertices.count, by: 3) {
+            center += SIMD3(mesh.vertices[i], mesh.vertices[i + 1], mesh.vertices[i + 2])
+        }
+        center /= Float(max(1, mesh.vertices.count / 3))
+        let node = HeadFitSceneView.headNode(vertices: mesh.vertices, triangles: mesh.triangles, transparency: 1)
+        node.simdPosition = -center
+        scene.rootNode.addChildNode(node)
+
+        let camera = SCNNode()
+        camera.camera = SCNCamera()
+        camera.camera?.zNear = 0.01
+        camera.simdPosition = SIMD3<Float>(0, 0.02, 0.45)
+        camera.simdLook(at: .zero)
+        scene.rootNode.addChildNode(camera)
+
+        view.scene = scene
+        view.allowsCameraControl = true
+        view.autoenablesDefaultLighting = true
+        view.backgroundColor = .systemBackground
+        return view
+    }
+
+    func updateUIView(_ view: SCNView, context: Context) {}
 }

@@ -8,6 +8,9 @@
 import SwiftUI
 
 struct ContentView: View {
+    /// Saved heads, shared by every tab (made in Scan, used by tracking).
+    @State private var heads = HeadStore()
+
     var body: some View {
         TabView {
             Tab("Scan", systemImage: "cube.transparent") {
@@ -17,6 +20,7 @@ struct ContentView: View {
                 DepthCheckView()
             }
         }
+        .environment(heads)
     }
 }
 

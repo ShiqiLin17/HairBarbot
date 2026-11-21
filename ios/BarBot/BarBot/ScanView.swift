@@ -25,6 +25,8 @@ struct ScanView: View {
     @State private var newName = ""
     @State private var renameError: String?
     @State private var fitting: SavedScan?
+    @State private var viewingHead: SavedHead?
+    @Environment(HeadStore.self) private var heads
 
     var body: some View {
         NavigationStack {
@@ -87,9 +89,38 @@ struct ScanView: View {
                             }
                     }
                 }
+
+                Section {
+                    if heads.heads.isEmpty {
+                        Text("None yet. Long-press a scan → Fit Head Model → Save → Use for Tracking.")
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(heads.heads) { head in
+                        Button {
+                            viewingHead = head
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(head.name)
+                                Text("from \(head.sourceScan) · \(head.created.formatted(date: .abbreviated, time: .shortened))")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .tint(.primary)
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                heads.delete(head)
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Saved heads (\(heads.heads.count))")
+                }
             }
             .navigationTitle("Scan")
-            .refreshable { store.reload() }
+            .refreshable { store.reload(); heads.reload() }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -123,6 +154,9 @@ struct ScanView: View {
         }
         .fullScreenCover(item: $fitting) { scan in
             HeadFitScreen(scan: scan, store: store, onClose: { fitting = nil })
+        }
+        .fullScreenCover(item: $viewingHead) { head in
+            SavedHeadScreen(head: head, onClose: { viewingHead = nil })
         }
         // Rename: a box to type the new name
         .alert("Rename Scan", isPresented: Binding(get: { renaming != nil },
