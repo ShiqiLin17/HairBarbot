@@ -24,6 +24,7 @@ struct ScanView: View {
     @State private var renaming: SavedScan?
     @State private var newName = ""
     @State private var renameError: String?
+    @State private var fitting: SavedScan?
 
     var body: some View {
         NavigationStack {
@@ -65,8 +66,13 @@ struct ScanView: View {
                                 }
                                 .tint(.blue)
                             }
-                            // Long-press: the same, plus Share
+                            // Long-press: the same, plus Share and Fit Head Model
                             .contextMenu {
+                                Button {
+                                    fitting = scan
+                                } label: {
+                                    Label("Fit Head Model", systemImage: "person.crop.circle")
+                                }
                                 Button {
                                     startRenaming(scan)
                                 } label: {
@@ -114,6 +120,9 @@ struct ScanView: View {
         .fullScreenCover(item: $viewing) { scan in
             SavedScanScreen(scan: scan, store: store, onClose: { viewing = nil })
                 .ignoresSafeArea()
+        }
+        .fullScreenCover(item: $fitting) { scan in
+            HeadFitScreen(scan: scan, store: store, onClose: { fitting = nil })
         }
         // Rename: a box to type the new name
         .alert("Rename Scan", isPresented: Binding(get: { renaming != nil },

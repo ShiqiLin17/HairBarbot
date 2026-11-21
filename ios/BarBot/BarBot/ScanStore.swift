@@ -22,6 +22,13 @@ nonisolated struct SavedScan: Identifiable, Hashable, Sendable {
     var id: URL { url }
     /// File name without ".ply", e.g. "scan-2026-11-19-143205".
     var name: String { url.deletingPathExtension().lastPathComponent }
+
+    /// "front", "left", "right" or "back" if the name contains one of those words
+    /// (e.g. "scan-2026-11-19-143205-left" or "bryson-back-cap"), else nil.
+    var side: String? {
+        let words = name.lowercased().split(whereSeparator: { "-_ .".contains($0) })
+        return ["front", "left", "right", "back"].first { words.contains(Substring($0)) }
+    }
 }
 
 enum ScanStoreError: LocalizedError {

@@ -14,3 +14,6 @@ DerivedData/
 *.xcuserstate
 build/
 .build/
+
+# FLAME vertex masks: no stated license, regenerate locally with tools/flame/convert_flame.py
+ios/BarBot/BarBot/HeadModel/FLAMEMasks.bin
