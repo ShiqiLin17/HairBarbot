@@ -32,6 +32,9 @@ nonisolated struct SavedHead: Codable, Identifiable, Hashable, Sendable {
     var scalpRms: Float?
     var coverage: Float?
 
+    /// The latest line-up with Apple's face mask (nil until you do one in the Track tab).
+    var lineUp: LineUp?
+
     var id: String { name }
 
     var shapeData: Data { shape.withUnsafeBufferPointer { Data(buffer: $0) } }
@@ -102,6 +105,17 @@ final class HeadStore {
         return head
     }
 
+    /// Writes a changed head (e.g. with a new line-up) back to its file.
+    func update(_ head: SavedHead) throws {
+        do {
+            let data = try Self.encoder.encode(head)
+            try data.write(to: url(for: head.name), options: .atomic)
+        } catch {
+            throw HeadStoreError.writeFailed(error.localizedDescription)
+        }
+        reload()
+    }
+
     func delete(_ head: SavedHead) {
         try? FileManager.default.removeItem(at: url(for: head.name))
         reload()
@@ -150,6 +164,6 @@ struct HeadMesh: @unchecked Sendable {
 }
 
 extension Data {
-    var floats: [Float] { withUnsafeBytes { Array($0.bindMemory(to: Float.self)) } }
-    var uint32s: [UInt32] { withUnsafeBytes { Array($0.bindMemory(to: UInt32.self)) } }
+    nonisolated var floats: [Float] { withUnsafeBytes { Array($0.bindMemory(to: Float.self)) } }
+    nonisolated var uint32s: [UInt32] { withUnsafeBytes { Array($0.bindMemory(to: UInt32.self)) } }
 }
