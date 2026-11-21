@@ -16,6 +16,9 @@ struct ContentView: View {
             Tab("Scan", systemImage: "cube.transparent") {
                 ScanView()
             }
+            Tab("Track", systemImage: "face.dashed") {
+                TrackView()
+            }
             Tab("Depth Check", systemImage: "ruler") {
                 DepthCheckView()
             }
