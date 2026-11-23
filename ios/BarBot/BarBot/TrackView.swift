@@ -84,6 +84,15 @@ final class TrackState {
     var depthLens = ""
     var depthMirrored = false
     var maskGap: (low: Float, median: Float, high: Float, count: Int)?
+
+    /// Depth correction ("Fix"): on/off; the latest correction as a head-space move to apply
+    /// after Apple's pose (head as Apple places it ← corrected head); when it was last updated;
+    /// and the last snap's numbers.
+    var depthFixOn = false
+    var fixCorrection: simd_float4x4?
+    var fixUpdated = Date.distantPast
+    var fixRms: Float = 0
+    var fixPoints = 0
     /// Distance (meters) at which the dots reach full blue (inside) or full red (outside).
     var colorScale: Double = 0.01
     fileprivate var depthCount = 0
@@ -211,6 +220,9 @@ struct TrackView: View {
                          + (lineUp.change.map { "  " + changeText($0) } ?? ""))
                         .foregroundStyle(.secondary)
                 }
+                if state.depthFixOn {
+                    Text(fixText).bold()
+                }
                 if state.depthCheckOn {
                     Divider()
                     depthReadout
@@ -225,7 +237,24 @@ struct TrackView: View {
     /// The tracked head's pose in phone space (needs a line-up).
     private var headPose: HeadPose? {
         guard let lineUp = head?.lineUp, let pose = state.pose, state.status == .tracking else { return nil }
-        return HeadPose(transform: pose.transform * lineUp.faceToHeadMatrix.inverse)
+        let apple = pose.transform * lineUp.faceToHeadMatrix.inverse
+        return HeadPose(transform: state.depthFixOn ? apple * (state.fixCorrection ?? matrix_identity_float4x4) : apple)
+    }
+
+    /// "depth fix: head moved 7.9 mm, 1.2° from Apple's pose · fit 1.4 mm (2100 pts)".
+    private var fixText: String {
+        guard let c = state.fixCorrection else {
+            return state.fixPoints > 0
+                ? String(format: "depth fix: not used (fit %.1f mm, %d pts)", state.fixRms * 1000, state.fixPoints)
+                : "depth fix: waiting for depth…"
+        }
+        // How far the correction moves the head's center, and by what angle
+        let shift = simd_length(SIMD3(c.columns.3.x, c.columns.3.y, c.columns.3.z)) * 1000
+        let trace = c.columns.0.x + c.columns.1.y + c.columns.2.z
+        let degrees = acos(max(-1, min(1, (trace - 1) / 2))) * 180 / .pi
+        let stale = Date().timeIntervalSince(state.fixUpdated) > 0.5 ? " (old)" : ""
+        return String(format: "depth fix: moved %.1f mm, %.1f° · fit %.1f mm (%d pts)%@",
+                      shift, degrees, state.fixRms * 1000, state.fixPoints, stale)
     }
 
     /// The one line shown when the panel is folded.
@@ -358,6 +387,9 @@ struct TrackView: View {
                     .toggleStyle(.button)
                     .disabled(head?.lineUp == nil)
                 Toggle("Depth", isOn: $state.depthCheckOn)
+                    .toggleStyle(.button)
+                    .disabled(head?.lineUp == nil)
+                Toggle("Fix", isOn: $state.depthFixOn)
                     .toggleStyle(.button)
                     .disabled(head?.lineUp == nil)
             }
@@ -510,6 +542,7 @@ struct FaceTrackingView: UIViewRepresentable {
                                     visible: state.showHead, opacity: state.headOpacity,
                                     shape: headShape)
         context.coordinator.pointsNode.isHidden = !state.depthCheckOn
+        context.coordinator.applyCorrection()
     }
 
     static func dismantleUIView(_ view: ARSCNView, coordinator: Coordinator) {
@@ -532,10 +565,18 @@ struct FaceTrackingView: UIViewRepresentable {
         init(state: TrackState) { self.state = state }
 
         /// Puts the lined-up head inside the face node, so it moves with Apple's face pose.
+        /// Places the drawn head and the depth points: Apple's pose, then the line-up offset,
+        /// then (if Fix is on) the latest depth correction.
+        func applyCorrection() {
+            let base = headToFace ?? matrix_identity_float4x4
+            let corrected = state.depthFixOn ? base * (state.fixCorrection ?? matrix_identity_float4x4) : base
+            pointsNode.simdTransform = corrected
+            headNode?.simdTransform = corrected
+        }
+
         func setHead(mesh: HeadMesh?, key: String?, headToFace: simd_float4x4?, visible: Bool, opacity: Double,
                      shape: Data?) {
             self.headToFace = headToFace
-            pointsNode.simdTransform = headToFace ?? matrix_identity_float4x4
             let wanted = mesh == nil ? nil : key
             if wanted != headKey {
                 headKey = wanted
@@ -553,10 +594,10 @@ struct FaceTrackingView: UIViewRepresentable {
                 }
             }
             if let headNode {
-                headNode.simdTransform = headToFace ?? matrix_identity_float4x4
                 headNode.isHidden = !visible || headToFace == nil
                 headNode.geometry?.firstMaterial?.transparency = CGFloat(opacity)
             }
+            applyCorrection()
         }
 
         /// Expressions that change the face's shape; if any is strong, the face isn't relaxed.
@@ -583,7 +624,7 @@ struct FaceTrackingView: UIViewRepresentable {
                         collector.add(vertices: face.geometry.vertices, pose: transform, expression: expression)
                         state.collectProgress = collector.progress
                     }
-                    if state.depthCheckOn, let face, let depth = frame.capturedDepthData,
+                    if state.depthCheckOn || state.depthFixOn, let face, let depth = frame.capturedDepthData,
                        let checker, let headToFace {
                         let input = DepthCheckInput(depth: depth,
                                                     intrinsics: frame.camera.intrinsics,
@@ -593,7 +634,8 @@ struct FaceTrackingView: UIViewRepresentable {
                                                     maskWorld: face.geometry.vertices.map { v in
                                                         let w = face.transform * SIMD4(v, 1)
                                                         return SIMD3(w.x, w.y, w.z)
-                                                    })
+                                                    },
+                                                    correct: state.depthFixOn)
                         checker.submit(input) { result in
                             Task { @MainActor in self.show(result) }
                         }
@@ -613,6 +655,20 @@ struct FaceTrackingView: UIViewRepresentable {
         /// Shows a measured depth frame: the numbers, and the points colored by signed distance
         /// from the head's surface (green = on it, blue = inside, red = outside).
         private func show(_ result: DepthCheckFrame) {
+            if state.depthFixOn {
+                state.fixRms = result.snapRms
+                state.fixPoints = result.snapPoints
+                if let c = result.correction {
+                    // Stored the other way round: it's applied to the head, not the points
+                    state.fixCorrection = c.inverse
+                    state.fixUpdated = Date()
+                } else if Date().timeIntervalSince(state.fixUpdated) > 1 {
+                    state.fixCorrection = nil   // no good snap for a second: back to Apple's pose
+                }
+                applyCorrection()
+            } else {
+                state.fixCorrection = nil
+            }
             guard state.depthCheckOn else { return }
             state.depthStats = result.stats
             state.depthLens = result.lens

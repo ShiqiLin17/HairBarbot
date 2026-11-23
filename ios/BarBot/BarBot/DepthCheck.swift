@@ -12,6 +12,12 @@
 //  turned, one side shows up consistently outside (+) and the other inside (-).
 //  Hair sticks out past the head; points more than 2 cm away aren't counted.
 //
+//  Depth correction ("Fix"): before measuring, the depth points on the firm, hair-free
+//  parts of the head (face without lips and eyes, nose, ears) are snapped onto the head
+//  model. The small move that takes is the error in Apple's face pose right now; the
+//  Track tab applies it to Apple's pose until the next depth picture. The forehead and
+//  scalp aren't used for the snap, so their numbers are an independent check.
+//
 
 import AVFoundation
 import os
@@ -42,6 +48,11 @@ nonisolated struct DepthCheckFrame: @unchecked Sendable {
     /// camera's view, in meters. + = the real face is behind the mask (the mask floats in
     /// front of it). Lower quarter, middle (median) and upper quarter; nil if too few points.
     var maskGap: (low: Float, median: Float, high: Float, count: Int)?
+    /// Depth correction, if asked for and it worked: moves Apple-placed head-space points onto
+    /// the head (corrected = correction × point), with its fit error and point count.
+    var correction: simd_float4x4?
+    var snapRms: Float = 0
+    var snapPoints = 0
 }
 
 /// What one depth frame needs, copied off the AR frame.
@@ -55,12 +66,21 @@ nonisolated struct DepthCheckInput: @unchecked Sendable {
     var worldToHead: simd_float4x4
     /// Apple's face mask points in world space.
     var maskWorld: [SIMD3<Float>]
+    /// Whether to work out a depth correction for Apple's pose.
+    var correct: Bool
 }
 
 nonisolated final class DepthChecker: @unchecked Sendable {
     static let gate: Float = 0.02          // points farther than 2 cm from the head aren't head
     static let pixelStep = 2               // use every 2nd depth pixel each way
     static let headRadius: Float = 0.2     // ignore points farther than this from the head center
+    // Depth correction: snap with pairs up to 2 cm apart at first, narrowing to 4 mm
+    static let snapStartGate: Float = 0.02
+    static let snapEndGate: Float = 0.004
+    static let snapIterations = 16
+    static let snapMaxPoints = 4000
+    static let snapMinPoints = 300
+    static let snapMaxRms: Float = 0.004
 
     private let surface: SCHeadSurfaceCheck
     /// Whether depth pixels need flipping left-right to match ARKit's space. Decided
@@ -187,6 +207,32 @@ nonisolated final class DepthChecker: @unchecked Sendable {
             }
         }
 
+        // Depth correction: snap a sample of the points onto the head's firm parts, then
+        // move all points by the result (so the numbers below show the corrected pose)
+        var correction: simd_float4x4?
+        var snapRms: Float = 0, snapCount = 0
+        if input.correct && !points.isEmpty {
+            let step = max(1, points.count / Self.snapMaxPoints)
+            var sample = [Float]()
+            sample.reserveCapacity(points.count / step * 3 + 3)
+            for i in stride(from: 0, to: points.count, by: step) {
+                sample += [points[i].x, points[i].y, points[i].z]
+            }
+            let snap = surface.snap(points: sample.withUnsafeBufferPointer { Data(buffer: $0) },
+                                    startGate: Self.snapStartGate, endGate: Self.snapEndGate,
+                                    iterations: Self.snapIterations)
+            snapRms = snap.rmsError
+            snapCount = snap.usedPointCount
+            if snapCount >= Self.snapMinPoints && snapRms < Self.snapMaxRms {
+                let c = snap.correction
+                correction = c
+                points = points.map { p in
+                    let q = c * SIMD4(p, 1)
+                    return SIMD3(q.x, q.y, q.z)
+                }
+            }
+        }
+
         // SIMD3<Float> is padded to 16 bytes; pack as plain x, y, z
         var packed = [Float]()
         packed.reserveCapacity(points.count * 3)
@@ -209,6 +255,7 @@ nonisolated final class DepthChecker: @unchecked Sendable {
         }
         return DepthCheckFrame(points: points, distances: distances, regions: regions,
                                stats: stats, mirrored: mirrored,
-                               lens: "\(lens) \(width)×\(height)", maskGap: maskGap)
+                               lens: "\(lens) \(width)×\(height)", maskGap: maskGap,
+                               correction: correction, snapRms: snapRms, snapPoints: snapCount)
     }
 }
