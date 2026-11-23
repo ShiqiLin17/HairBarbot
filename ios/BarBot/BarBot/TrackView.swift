@@ -6,8 +6,9 @@
 //  Shows the camera picture with Apple's face mask drawn on it, and the live
 //  head pose relative to the phone. With a saved head chosen, "Line Up" snaps
 //  Apple's mask onto that head's face (see LineUp.swift). After that, the whole
-//  head is drawn on the picture and its pose is shown (option A: Apple's face
-//  pose plus the fixed line-up offset).
+//  head is drawn on the picture and its pose is shown: Apple's face pose, plus the
+//  fixed line-up offset, plus (Fix) the live depth correction, then (Smooth) the
+//  One Euro filter.
 //
 //  "Phone space" (all poses here are measured in it), with the phone upright
 //  (portrait) and you looking at the screen:
@@ -88,11 +89,17 @@ final class TrackState {
     /// Depth correction ("Fix"): on/off; the latest correction as a head-space move to apply
     /// after Apple's pose (head as Apple places it ← corrected head); when it was last updated;
     /// and the last snap's numbers.
-    var depthFixOn = false
+    var depthFixOn = true
     var fixCorrection: simd_float4x4?
     var fixUpdated = Date.distantPast
     var fixRms: Float = 0
     var fixPoints = 0
+
+    /// One Euro smoothing of the final head pose (see OneEuroFilter.swift).
+    var smoothOn = true
+    /// The head's final pose in world space (= camera space), and world → phone space.
+    var headWorld: simd_float4x4?
+    var cameraView = matrix_identity_float4x4
     /// Distance (meters) at which the dots reach full blue (inside) or full red (outside).
     var colorScale: Double = 0.01
     fileprivate var depthCount = 0
@@ -236,9 +243,8 @@ struct TrackView: View {
 
     /// The tracked head's pose in phone space (needs a line-up).
     private var headPose: HeadPose? {
-        guard let lineUp = head?.lineUp, let pose = state.pose, state.status == .tracking else { return nil }
-        let apple = pose.transform * lineUp.faceToHeadMatrix.inverse
-        return HeadPose(transform: state.depthFixOn ? apple * (state.fixCorrection ?? matrix_identity_float4x4) : apple)
+        guard head?.lineUp != nil, let world = state.headWorld, state.status == .tracking else { return nil }
+        return HeadPose(transform: state.cameraView * world)
     }
 
     /// "depth fix: head moved 7.9 mm, 1.2° from Apple's pose · fit 1.4 mm (2100 pts)".
@@ -381,18 +387,30 @@ struct TrackView: View {
 
                 Spacer()
 
+                Button {
+                    startLineUp()
+                } label: {
+                    Label(head?.lineUp == nil ? "Line Up" : "Line Up Again", systemImage: "scope")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(head == nil || state.status != .tracking || state.lineUpPhase != .idle)
+            }
+
+            HStack(spacing: 6) {
                 Toggle("Mask", isOn: $state.showMask)
-                    .toggleStyle(.button)
                 Toggle("Head", isOn: $state.showHead)
-                    .toggleStyle(.button)
                     .disabled(head?.lineUp == nil)
                 Toggle("Depth", isOn: $state.depthCheckOn)
-                    .toggleStyle(.button)
                     .disabled(head?.lineUp == nil)
                 Toggle("Fix", isOn: $state.depthFixOn)
-                    .toggleStyle(.button)
+                    .disabled(head?.lineUp == nil)
+                Toggle("Smooth", isOn: $state.smoothOn)
                     .disabled(head?.lineUp == nil)
             }
+            .toggleStyle(.button)
+            .controlSize(.small)
+            .lineLimit(1)
+            .fixedSize()
 
             if head?.lineUp != nil && state.showHead {
                 HStack {
@@ -402,15 +420,6 @@ struct TrackView: View {
                 }
                 .foregroundStyle(.secondary)
             }
-
-            Button {
-                startLineUp()
-            } label: {
-                Label(head?.lineUp == nil ? "Line Up" : "Line Up Again", systemImage: "scope")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(head == nil || state.status != .tracking || state.lineUpPhase != .idle)
         }
         .padding(12)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
@@ -528,6 +537,7 @@ struct FaceTrackingView: UIViewRepresentable {
         view.delegate = context.coordinator
         view.session.delegate = context.coordinator
         view.automaticallyUpdatesLighting = true
+        context.coordinator.attach(to: view.scene.rootNode)
 
         let configuration = ARFaceTrackingConfiguration()
         configuration.worldAlignment = .camera   // poses relative to the phone, not the room
@@ -542,7 +552,7 @@ struct FaceTrackingView: UIViewRepresentable {
                                     visible: state.showHead, opacity: state.headOpacity,
                                     shape: headShape)
         context.coordinator.pointsNode.isHidden = !state.depthCheckOn
-        context.coordinator.applyCorrection()
+        context.coordinator.placeHead()
     }
 
     static func dismantleUIView(_ view: ARSCNView, coordinator: Coordinator) {
@@ -553,25 +563,56 @@ struct FaceTrackingView: UIViewRepresentable {
         let state: TrackState
         /// Read by SceneKit's drawing thread.
         nonisolated(unsafe) var maskVisible = true
-        /// The node that follows Apple's face (made on SceneKit's thread), and the head drawn in it.
-        nonisolated(unsafe) var faceNode: SCNNode?
-        nonisolated(unsafe) var headNode: SCNNode?
+        /// The scene's root (world space): the drawn head and depth points hang here, placed
+        /// at the final head pose each frame.
+        private var rootNode: SCNNode?
+        private var headNode: SCNNode?
+        /// Whether the head should be shown (has a line-up, and the Head button is on).
+        private var headWanted = false
+        private var filter = OneEuroPoseFilter()
         private var headKey: String?
         /// Depth points colored by distance, drawn in head space.
-        nonisolated(unsafe) var pointsNode = SCNNode()
+        var pointsNode = SCNNode()
         private var checker: DepthChecker?
         private var headToFace: simd_float4x4?
 
         init(state: TrackState) { self.state = state }
 
-        /// Puts the lined-up head inside the face node, so it moves with Apple's face pose.
-        /// Places the drawn head and the depth points: Apple's pose, then the line-up offset,
-        /// then (if Fix is on) the latest depth correction.
-        func applyCorrection() {
-            let base = headToFace ?? matrix_identity_float4x4
-            let corrected = state.depthFixOn ? base * (state.fixCorrection ?? matrix_identity_float4x4) : base
-            pointsNode.simdTransform = corrected
-            headNode?.simdTransform = corrected
+        func attach(to root: SCNNode) {
+            rootNode = root
+            root.addChildNode(pointsNode)
+            if let headNode { root.addChildNode(headNode) }
+        }
+
+        /// Places the drawn head and the depth points at the final head pose (hidden without one).
+        func placeHead() {
+            guard let world = state.headWorld else {
+                headNode?.isHidden = true
+                pointsNode.isHidden = true
+                return
+            }
+            headNode?.simdTransform = world
+            headNode?.isHidden = !headWanted
+            pointsNode.simdTransform = world
+            pointsNode.isHidden = !state.depthCheckOn
+        }
+
+        /// The head's pose in world space for this frame: Apple's face pose, the line-up offset,
+        /// the depth correction (Fix), then smoothing (Smooth).
+        private func updateHeadPose(face: simd_float4x4, time: TimeInterval) {
+            guard let headToFace else {
+                state.headWorld = nil
+                filter.reset()
+                return
+            }
+            var world = face * headToFace
+            if state.depthFixOn, let correction = state.fixCorrection { world = world * correction }
+            if state.smoothOn {
+                world = filter.update(world, time: time)
+            } else {
+                filter.reset()
+            }
+            state.headWorld = world
         }
 
         func setHead(mesh: HeadMesh?, key: String?, headToFace: simd_float4x4?, visible: Bool, opacity: Double,
@@ -590,14 +631,13 @@ struct FaceTrackingView: UIViewRepresentable {
                                                          transparency: 0.5)
                     node.renderingOrder = 10
                     headNode = node
-                    faceNode?.addChildNode(node)
+                    rootNode?.addChildNode(node)
                 }
+                filter.reset()
             }
-            if let headNode {
-                headNode.isHidden = !visible || headToFace == nil
-                headNode.geometry?.firstMaterial?.transparency = CGFloat(opacity)
-            }
-            applyCorrection()
+            headWanted = visible && headToFace != nil
+            headNode?.geometry?.firstMaterial?.transparency = CGFloat(opacity)
+            placeHead()
         }
 
         /// Expressions that change the face's shape; if any is strong, the face isn't relaxed.
@@ -612,13 +652,19 @@ struct FaceTrackingView: UIViewRepresentable {
             // Apple's face pose in phone space: seen from the phone held upright.
             let face = frame.anchors.compactMap { $0 as? ARFaceAnchor }.first
             let tracked = face?.isTracked == true
-            let transform = face.map { frame.camera.viewMatrix(for: .portrait) * $0.transform }
+            let view = frame.camera.viewMatrix(for: .portrait)
+            let transform = face.map { view * $0.transform }
+            let faceWorld = face?.transform
+            let time = frame.timestamp
             let blendShapes = face?.blendShapes ?? [:]
             let expression = Self.expressionKeys.map { blendShapes[$0]?.floatValue ?? 0 }.max() ?? 0
             MainActor.assumeIsolated {
                 if tracked, let transform {
                     state.status = .tracking
                     state.pose = HeadPose(transform: transform)
+                    state.cameraView = view
+                    if let faceWorld { updateHeadPose(face: faceWorld, time: time) }
+                    placeHead()
                     state.updateCount += 1
                     if let collector = state.collector, !collector.isDone, let face {
                         collector.add(vertices: face.geometry.vertices, pose: transform, expression: expression)
@@ -642,6 +688,9 @@ struct FaceTrackingView: UIViewRepresentable {
                     }
                 } else if state.status != .unsupported {
                     state.status = .noFace
+                    state.headWorld = nil
+                    filter.reset()
+                    placeHead()
                 }
                 let elapsed = Date().timeIntervalSince(state.countStart)
                 if elapsed >= 1 {
@@ -665,7 +714,6 @@ struct FaceTrackingView: UIViewRepresentable {
                 } else if Date().timeIntervalSince(state.fixUpdated) > 1 {
                     state.fixCorrection = nil   // no good snap for a second: back to Apple's pose
                 }
-                applyCorrection()
             } else {
                 state.fixCorrection = nil
             }
@@ -730,9 +778,6 @@ struct FaceTrackingView: UIViewRepresentable {
             material?.lightingModel = .constant
             let container = SCNNode()
             container.addChildNode(SCNNode(geometry: geometry))
-            if let headNode { container.addChildNode(headNode) }
-            container.addChildNode(pointsNode)
-            faceNode = container
             return container
         }
 
@@ -742,9 +787,6 @@ struct FaceTrackingView: UIViewRepresentable {
                   let geometry = maskNode.geometry as? ARSCNFaceGeometry else { return }
             geometry.update(from: face.geometry)
             maskNode.isHidden = !maskVisible
-            // (Re)attach the head if it was made before this face node existed
-            if let headNode, headNode.parent !== node { node.addChildNode(headNode) }
-            if pointsNode.parent !== node { node.addChildNode(pointsNode) }
         }
     }
 }
