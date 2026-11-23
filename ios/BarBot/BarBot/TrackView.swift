@@ -21,6 +21,7 @@
 
 import ARKit
 import SceneKit
+import StandardCyborgFusion
 import SwiftUI
 
 // MARK: - Pose
@@ -75,6 +76,19 @@ final class TrackState {
     /// How solid the drawn head is (0 = invisible, 1 = solid).
     var headOpacity: Double = 0.3
 
+    /// Live depth check (see DepthCheck.swift): on/off, the latest per-region numbers,
+    /// and how many depth frames per second are being measured.
+    var depthCheckOn = false
+    var depthStats: [SCHeadRegion: RegionStats] = [:]
+    var depthChecksPerSecond: Double = 0
+    var depthLens = ""
+    var depthMirrored = false
+    var maskGap: (low: Float, median: Float, high: Float, count: Int)?
+    /// Distance (meters) at which the dots reach full blue (inside) or full red (outside).
+    var colorScale: Double = 0.01
+    fileprivate var depthCount = 0
+    fileprivate var depthCountStart = Date()
+
     var lineUpPhase: LineUpPhase = .idle
     /// Set while collecting mask frames for a line-up.
     var collector: LineUpCollector?
@@ -95,6 +109,7 @@ struct TrackView: View {
     @State private var message: (title: String, text: String)?
     /// The chosen head rebuilt as a mesh (for drawing it and comparing line-ups).
     @State private var mesh: HeadMesh?
+    @AppStorage("trackPanelFolded") private var panelFolded = false
 
     /// The chosen saved head (re-read from the store so a new line-up shows up).
     private var head: SavedHead? { heads.heads.first { $0.name == headName } }
@@ -110,7 +125,8 @@ struct TrackView: View {
                 FaceTrackingView(state: state,
                                  headMesh: head?.lineUp == nil ? nil : mesh,
                                  headKey: head.map { "\($0.name)|\($0.lineUp?.created.timeIntervalSince1970 ?? 0)" },
-                                 headToFace: head?.lineUp?.headToFaceMatrix)
+                                 headToFace: head?.lineUp?.headToFaceMatrix,
+                                 headShape: head?.shapeData)
                     .ignoresSafeArea()
             }
             VStack {
@@ -152,52 +168,131 @@ struct TrackView: View {
 
     // MARK: Pieces
 
+    /// The info panel at the top. Tap its top row to fold it down to one line.
     private var readout: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 10, height: 10)
-                Text(statusText).bold()
-                Spacer()
-                Text(String(format: "%.0f /s", state.updatesPerSecond))
-                    .foregroundStyle(.secondary)
-            }
-            if let pose = state.pose, state.status == .tracking {
-                let a = pose.angles
-                let p = pose.position * 100
-                Text(String(format: "turn %+6.1f°   nod %+6.1f°   tilt %+6.1f°", a.turn, a.nod, a.tilt))
-                Text(String(format: "x %+5.1f cm   y %+5.1f cm   distance %4.1f cm", p.x, p.y, -p.z))
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("turn —   nod —   tilt —")
-                Text("x —   y —   distance —")
-                    .foregroundStyle(.secondary)
-            }
-            if let lineUp = head?.lineUp {
-                Divider()
-                if let pose = state.pose, state.status == .tracking {
-                    let headPose = HeadPose(transform: pose.transform * lineUp.faceToHeadMatrix.inverse)
-                    let a = headPose.angles
-                    let p = headPose.position * 100
-                    Text(String(format: "head  turn %+5.1f°  nod %+5.1f°  tilt %+5.1f°", a.turn, a.nod, a.tilt))
-                    Text(String(format: "head center  x %+5.1f  y %+5.1f  z %+5.1f cm", p.x, p.y, p.z))
+        VStack(alignment: .leading, spacing: 3) {
+            Button {
+                withAnimation(.snappy) { panelFolded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 9, height: 9)
+                    Text(statusText).bold()
+                    if panelFolded, let line = foldedLine {
+                        Text(line).lineLimit(1)
+                    }
+                    Spacer()
+                    Text(String(format: "%.0f /s", state.updatesPerSecond))
+                        .foregroundStyle(.secondary)
+                    Image(systemName: panelFolded ? "chevron.down" : "chevron.up")
                         .foregroundStyle(.secondary)
                 }
-                Text(String(format: "line-up error %.1f mm   %d of %d points",
-                            lineUp.rmsError * 1000, lineUp.usedPoints, lineUp.totalPoints))
-                Text("lined up \(lineUp.created.formatted(date: .abbreviated, time: .shortened))"
-                     + String(format: " · moved %.1f mm / %.1f°", lineUp.movedMillimeters, lineUp.movedDegrees))
-                    .foregroundStyle(.secondary)
-                if let change = lineUp.change {
-                    Text(changeText(change))
+                .contentShape(Rectangle())
+            }
+            .tint(.primary)
+
+            if !panelFolded {
+                if let pose = state.pose, state.status == .tracking {
+                    let a = pose.angles
+                    let p = pose.position * 100
+                    Text(String(format: "face  turn %+5.1f°  nod %+5.1f°  tilt %+5.1f°  %.0f cm away",
+                                a.turn, a.nod, a.tilt, -p.z))
+                }
+                if let lineUp = head?.lineUp {
+                    if let headPose {
+                        let a = headPose.angles
+                        let p = headPose.position * 100
+                        Text(String(format: "head  turn %+5.1f°  nod %+5.1f°  tilt %+5.1f°", a.turn, a.nod, a.tilt))
+                        Text(String(format: "head center  x %+5.1f  y %+5.1f  z %+5.1f cm", p.x, p.y, p.z))
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(String(format: "line-up %.1f mm (%d pts)", lineUp.rmsError * 1000, lineUp.usedPoints)
+                         + (lineUp.change.map { "  " + changeText($0) } ?? ""))
                         .foregroundStyle(.secondary)
+                }
+                if state.depthCheckOn {
+                    Divider()
+                    depthReadout
                 }
             }
         }
-        .font(.callout.monospacedDigit())
-        .padding(12)
+        .font(.caption.monospacedDigit())
+        .padding(10)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// The tracked head's pose in phone space (needs a line-up).
+    private var headPose: HeadPose? {
+        guard let lineUp = head?.lineUp, let pose = state.pose, state.status == .tracking else { return nil }
+        return HeadPose(transform: pose.transform * lineUp.faceToHeadMatrix.inverse)
+    }
+
+    /// The one line shown when the panel is folded.
+    private var foldedLine: String? {
+        if state.depthCheckOn {
+            let s = state.depthStats
+            func mean(_ r: SCHeadRegion) -> String {
+                guard let v = s[r], v.count >= 20 else { return "—" }
+                return String(format: "%+.0f", v.mean * 1000)
+            }
+            return "face \(mean(.face)) ears \(mean(.leftEar))/\(mean(.rightEar)) mm"
+        }
+        if let a = (headPose ?? state.pose)?.angles {
+            return String(format: "turn %+.0f° nod %+.0f° tilt %+.0f°", a.turn, a.nod, a.tilt)
+        }
+        return nil
+    }
+
+    /// Per-region depth errors: "rms (average)" in mm. Average + = points outside the head.
+    private var depthReadout: some View {
+        let s = state.depthStats
+        func part(_ name: String, _ region: SCHeadRegion) -> String {
+            guard let r = s[region], r.count >= 20 else { return "\(name) —" }
+            return String(format: "%@ %.1f (%+.1f)", name, r.rms * 1000, r.mean * 1000)
+        }
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text("depth check, mm: rms (average)").bold()
+                Spacer()
+                Text(String(format: "%.0f /s", state.depthChecksPerSecond)).foregroundStyle(.secondary)
+            }
+            Text(part("face", .face) + "   " + part("forehead", .forehead))
+            Text(part("your left ear", .leftEar) + "   " + part("right ear", .rightEar))
+            Text(part("scalp/hair", .scalp))
+            HStack(spacing: 8) {
+                legendDot(.blue, "inside")
+                legendDot(.green, "on")
+                legendDot(.red, "outside")
+                Menu {
+                    ForEach([2.0, 5.0, 10.0, 20.0], id: \.self) { mm in
+                        Button(String(format: "full color at ±%.0f mm", mm)) { state.colorScale = mm / 1000 }
+                    }
+                } label: {
+                    Text(String(format: "±%.0f mm ▾", state.colorScale * 1000))
+                }
+                Spacer()
+            }
+            if let gap = state.maskGap {
+                Text(String(format: "Apple mask vs depth: %+.1f mm (middle half %+.1f to %+.1f, %d pts)",
+                            gap.median * 1000, gap.low * 1000, gap.high * 1000, gap.count))
+                    .bold()
+                Text(gap.median > 0 ? "+ = Apple's mask floats in front of your real face"
+                                    : "− = Apple's mask sits behind your real face")
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Apple mask vs depth: —")
+            }
+            Text("\(state.depthLens) · flip \(state.depthMirrored ? "yes" : "no")")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func legendDot(_ color: Color, _ text: String) -> some View {
+        HStack(spacing: 3) {
+            Circle().fill(color).frame(width: 7, height: 7)
+            Text(text)
+        }
     }
 
     @ViewBuilder
@@ -260,6 +355,9 @@ struct TrackView: View {
                 Toggle("Mask", isOn: $state.showMask)
                     .toggleStyle(.button)
                 Toggle("Head", isOn: $state.showHead)
+                    .toggleStyle(.button)
+                    .disabled(head?.lineUp == nil)
+                Toggle("Depth", isOn: $state.depthCheckOn)
                     .toggleStyle(.button)
                     .disabled(head?.lineUp == nil)
             }
@@ -388,6 +486,8 @@ struct FaceTrackingView: UIViewRepresentable {
     let headMesh: HeadMesh?
     let headKey: String?
     let headToFace: simd_float4x4?
+    /// The head's shape numbers, for the depth check.
+    let headShape: Data?
 
     func makeCoordinator() -> Coordinator { Coordinator(state: state) }
 
@@ -407,7 +507,9 @@ struct FaceTrackingView: UIViewRepresentable {
     func updateUIView(_ view: ARSCNView, context: Context) {
         context.coordinator.maskVisible = state.showMask
         context.coordinator.setHead(mesh: headMesh, key: headKey, headToFace: headToFace,
-                                    visible: state.showHead, opacity: state.headOpacity)
+                                    visible: state.showHead, opacity: state.headOpacity,
+                                    shape: headShape)
+        context.coordinator.pointsNode.isHidden = !state.depthCheckOn
     }
 
     static func dismantleUIView(_ view: ARSCNView, coordinator: Coordinator) {
@@ -422,16 +524,26 @@ struct FaceTrackingView: UIViewRepresentable {
         nonisolated(unsafe) var faceNode: SCNNode?
         nonisolated(unsafe) var headNode: SCNNode?
         private var headKey: String?
+        /// Depth points colored by distance, drawn in head space.
+        nonisolated(unsafe) var pointsNode = SCNNode()
+        private var checker: DepthChecker?
+        private var headToFace: simd_float4x4?
 
         init(state: TrackState) { self.state = state }
 
         /// Puts the lined-up head inside the face node, so it moves with Apple's face pose.
-        func setHead(mesh: HeadMesh?, key: String?, headToFace: simd_float4x4?, visible: Bool, opacity: Double) {
+        func setHead(mesh: HeadMesh?, key: String?, headToFace: simd_float4x4?, visible: Bool, opacity: Double,
+                     shape: Data?) {
+            self.headToFace = headToFace
+            pointsNode.simdTransform = headToFace ?? matrix_identity_float4x4
             let wanted = mesh == nil ? nil : key
             if wanted != headKey {
                 headKey = wanted
                 headNode?.removeFromParentNode()
                 headNode = nil
+                checker = shape.flatMap { try? DepthChecker(shape: $0) }
+                pointsNode.geometry = nil
+                state.depthStats = [:]
                 if let mesh {
                     let node = HeadFitSceneView.headNode(vertices: mesh.vertices, triangles: mesh.triangles,
                                                          transparency: 0.5)
@@ -471,6 +583,21 @@ struct FaceTrackingView: UIViewRepresentable {
                         collector.add(vertices: face.geometry.vertices, pose: transform, expression: expression)
                         state.collectProgress = collector.progress
                     }
+                    if state.depthCheckOn, let face, let depth = frame.capturedDepthData,
+                       let checker, let headToFace {
+                        let input = DepthCheckInput(depth: depth,
+                                                    intrinsics: frame.camera.intrinsics,
+                                                    imageSize: frame.camera.imageResolution,
+                                                    cameraToWorld: frame.camera.transform,
+                                                    worldToHead: (face.transform * headToFace).inverse,
+                                                    maskWorld: face.geometry.vertices.map { v in
+                                                        let w = face.transform * SIMD4(v, 1)
+                                                        return SIMD3(w.x, w.y, w.z)
+                                                    })
+                        checker.submit(input) { result in
+                            Task { @MainActor in self.show(result) }
+                        }
+                    }
                 } else if state.status != .unsupported {
                     state.status = .noFace
                 }
@@ -481,6 +608,54 @@ struct FaceTrackingView: UIViewRepresentable {
                     state.countStart = Date()
                 }
             }
+        }
+
+        /// Shows a measured depth frame: the numbers, and the points colored by signed distance
+        /// from the head's surface (green = on it, blue = inside, red = outside).
+        private func show(_ result: DepthCheckFrame) {
+            guard state.depthCheckOn else { return }
+            state.depthStats = result.stats
+            state.depthLens = result.lens
+            state.depthMirrored = result.mirrored
+            state.maskGap = result.maskGap
+            state.depthCount += 1
+            let elapsed = Date().timeIntervalSince(state.depthCountStart)
+            if elapsed >= 1 {
+                state.depthChecksPerSecond = Double(state.depthCount) / elapsed
+                state.depthCount = 0
+                state.depthCountStart = Date()
+            }
+
+            var positions = [SCNVector3]()
+            var colors = [SIMD4<Float>]()
+            for i in result.points.indices where result.regions[i] != SCHeadRegion.none {
+                let p = result.points[i]
+                positions.append(SCNVector3(p.x, p.y, p.z))
+                // Green on the surface, fading to blue (inside) or red (outside) at ±colorScale
+                let t = max(-1, min(1, result.distances[i] / Float(state.colorScale)))
+                let green = SIMD4<Float>(0.1, 0.85, 0.2, 1)
+                let end: SIMD4<Float> = t < 0 ? SIMD4(0.15, 0.35, 1, 1) : SIMD4(1, 0.15, 0.1, 1)
+                colors.append(green + (end - green) * abs(t))
+            }
+            guard !positions.isEmpty else { pointsNode.geometry = nil; return }
+            let colorData = colors.withUnsafeBufferPointer { Data(buffer: $0) }
+            let colorSource = SCNGeometrySource(data: colorData, semantic: .color, vectorCount: colors.count,
+                                                usesFloatComponents: true, componentsPerVector: 4,
+                                                bytesPerComponent: MemoryLayout<Float>.size,
+                                                dataOffset: 0, dataStride: MemoryLayout<SIMD4<Float>>.stride)
+            let element = SCNGeometryElement(indices: (0..<UInt32(positions.count)).map { $0 },
+                                             primitiveType: .point)
+            element.pointSize = 3
+            element.minimumPointScreenSpaceRadius = 1.5
+            element.maximumPointScreenSpaceRadius = 3
+            let geometry = SCNGeometry(sources: [SCNGeometrySource(vertices: positions), colorSource],
+                                       elements: [element])
+            let material = SCNMaterial()
+            material.lightingModel = .constant
+            material.readsFromDepthBuffer = false   // always visible, even "inside" the drawn head
+            geometry.materials = [material]
+            pointsNode.geometry = geometry
+            pointsNode.renderingOrder = 20
         }
 
         nonisolated func session(_ session: ARSession, didFailWithError error: Error) {
@@ -500,6 +675,7 @@ struct FaceTrackingView: UIViewRepresentable {
             let container = SCNNode()
             container.addChildNode(SCNNode(geometry: geometry))
             if let headNode { container.addChildNode(headNode) }
+            container.addChildNode(pointsNode)
             faceNode = container
             return container
         }
@@ -512,6 +688,7 @@ struct FaceTrackingView: UIViewRepresentable {
             maskNode.isHidden = !maskVisible
             // (Re)attach the head if it was made before this face node existed
             if let headNode, headNode.parent !== node { node.addChildNode(headNode) }
+            if pointsNode.parent !== node { node.addChildNode(pointsNode) }
         }
     }
 }
