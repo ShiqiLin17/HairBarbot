@@ -1,0 +1,49 @@
+/* GENERATED from design/tokens.json by design/build_tokens.py. Do not edit by hand. */
+:root {
+  --primary: #1F5FD6;  /* Main buttons, links, selected states, progress */
+  --primary-pressed: #1748B0;  /* Pressed or active state of primary */
+  --on-primary: #FFFFFF;  /* Text and icons on primary */
+  --navy: #0B1F3A;  /* Hero headers, onboarding backgrounds */
+  --warm-white: #F7F4EE;  /* Occasional warm surface (onboarding, success cards); light mode only */
+  --bg: #F4F6F9;  /* Screen background */
+  --surface: #FFFFFF;  /* Cards, sheets */
+  --surface-2: #EEF1F5;  /* Inset areas, segmented controls */
+  --ink: #0E1620;  /* Main text */
+  --muted: #5B6673;  /* Secondary text, captions */
+  --line: #DCE2E8;  /* Dividers, card borders */
+  --stop: #D92D20;  /* SAFETY ONLY: blade off, emergency stop, error, the STOP button */
+  --on-stop: #FFFFFF;  /* Text on stop (white fails contrast on dark-mode stop) */
+  --warn: #B54708;  /* SAFETY ONLY: wait or adjust (rollers moving, move slower, low battery) */
+  --ok: #1E7F4C;  /* SAFETY ONLY: ready to cut, connected. Not for 'area done' fills */
+  --fade-0: #0B1F3A;
+  --fade-1: #183C73;
+  --fade-2: #2D63B5;
+  --fade-3: #6E9BE3;
+  --fade-4: #B5CDF9;
+  --radius-card: 14px;
+  --radius-button: 16px;
+  --radius-chip: 999px;
+  --stop-button-min-height: 56px;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --primary: #4F8AF0;
+    --primary-pressed: #7FA9F5;
+    --on-primary: #0A0E14;
+    --navy: #0B1F3A;
+    --warm-white: #F7F4EE;
+    --bg: #0A0E14;
+    --surface: #121821;
+    --surface-2: #1A222D;
+    --ink: #E9EEF4;
+    --muted: #8C99A8;
+    --line: #263040;
+    --stop: #FF453A;
+    --on-stop: #1A0503;
+    --warn: #F5A524;
+    --ok: #3DD68C;
+  }
+}
