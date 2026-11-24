@@ -2,6 +2,9 @@
 
 Results of hands-on tests of the BarBot iPhone app, newest last.
 
+BarBot is the **developer test app** (see [ios/README.md](../ios/README.md)). These tests
+measure what works, so the findings can go into the separate user-facing app.
+
 ## Setup used
 
 | Item | Version |
