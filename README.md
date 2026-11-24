@@ -11,10 +11,11 @@ rollers aren't at the right length yet, the clipper turns off immediately.
 > Design history: we started with a big "halo" robot, then a handheld version with a headband sensor.
 > The current design is fully handheld with no headband. Older versions are in the git history.
 
-> **iPhone app (in progress):** head scanning and head tracking are being rebuilt for the iPhone in
-> [`ios/`](ios/README.md). The app there, **BarBot**, is our **developer test app**: it shows all the
-> engineering (raw numbers, error maps, test logs) so we can measure what works. What we learn from it will
-> go into a separate, simpler **user-facing app**. See [ios/README.md](ios/README.md).
+> **iPhone apps (in progress):** head scanning and head tracking are being rebuilt for the iPhone in
+> [`ios/`](ios/README.md). **HairBarbot** is the **user-facing app**: a guided three-part head scan saved
+> under the person's name, then choose a person and style to cut (styles, cutting and the Bluetooth link
+> are placeholders for now). **BarBot** is our **developer test app**: it shows all the engineering (raw
+> numbers, error maps, test logs) so we can measure what works. See [ios/README.md](ios/README.md).
 
 ## How it knows where it is on the head
 
@@ -54,10 +55,12 @@ pc/vision/head_scan.py         import a phone 3D scan (taken with a cap on) as a
 pc/camera_head.py              camera head tracking for the controller (follows head turns, measures the forehead)
 pc/tests/                      tests: simulated haircut, head tracking, face/scalp estimate, head sizes, scan import
 pc/live/                       Node.js + Socket.io live app: client app + operator dashboard
-ios/                           iPhone developer test app (BarBot) + StandardCyborg fork; see ios/README.md
+ios/                           iPhone apps: HairBarbot (user app) + BarBot (developer test app) + StandardCyborg fork; see ios/README.md
 tools/flame/                   converts the FLAME head model for the iPhone app
 docs/ios-test-log.md           results of hands-on iPhone app tests
 docs/budget.xlsx               parts list + budget
+design/                        user-app brand: style guide, color tokens (Swift + CSS), app icon; see design/README.md
+AGENTS.md                      pointers for AI agents (UI work -> design/)
 docs/build-book.html           drawings, parts to make, wiring, plan (open in a browser)
 ```
 

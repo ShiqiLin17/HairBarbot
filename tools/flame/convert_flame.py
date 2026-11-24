@@ -6,7 +6,7 @@ Usage (from this folder):
         ~/Downloads/FLAME2023Open/flame2023_Open.pkl \
         ~/Downloads/FLAME_masks/FLAME_masks.pkl
 
-Writes into ios/BarBot/BarBot/HeadModel/:
+Writes into ios/BarBot/Shared/HeadModel/:
     FLAMEHead.bin   average head, triangles, first N shape components (CC-BY-4.0, committed)
     FLAMEMasks.bin  named vertex groups (scalp, face, eyeballs, neck, ...) (not committed:
                     the masks download has no stated license, so it stays local)
@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # -I (isolated mode) l
 import safe_pickle  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
-OUT_DIR = REPO / "ios" / "BarBot" / "BarBot" / "HeadModel"
+OUT_DIR = REPO / "ios" / "BarBot" / "Shared" / "HeadModel"
 SHAPE_COMPONENTS = 100  # FLAME 2023 Open has 300 shape + 100 expression; later ones barely matter
 
 

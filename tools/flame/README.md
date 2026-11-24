@@ -28,7 +28,7 @@ Masks" download, which states no license) is **not** committed; regenerate it lo
    python3.11 -m venv .venv
    .venv/bin/pip install numpy scipy
    ```
-3. Convert (writes into `ios/BarBot/BarBot/HeadModel/`):
+3. Convert (writes into `ios/BarBot/Shared/HeadModel/`):
    ```
    .venv/bin/python -I convert_flame.py \
        ~/Downloads/FLAME2023Open/flame2023_Open.pkl \
