@@ -105,6 +105,17 @@ final class TrackState {
     fileprivate var depthCount = 0
     fileprivate var depthCountStart = Date()
 
+    /// Test recording (see TrackRecorder.swift).
+    enum RecordPhase: Equatable {
+        case idle
+        case countdown(Int)
+        case recording
+    }
+    var recordPhase: RecordPhase = .idle
+    var recorder: TrackRecorder?
+    var recordLabel = ""
+    var recordProgress: Double = 0
+
     var lineUpPhase: LineUpPhase = .idle
     /// Set while collecting mask frames for a line-up.
     var collector: LineUpCollector?
@@ -126,6 +137,10 @@ struct TrackView: View {
     /// The chosen head rebuilt as a mesh (for drawing it and comparing line-ups).
     @State private var mesh: HeadMesh?
     @AppStorage("trackPanelFolded") private var panelFolded = false
+    /// The last finished test run (shown in a sheet), and the custom-label prompt.
+    @State private var lastRun: TrackRunSummary?
+    @State private var askingLabel = false
+    @State private var customLabel = ""
 
     /// The chosen saved head (re-read from the store so a new line-up shows up).
     private var head: SavedHead? { heads.heads.first { $0.name == headName } }
@@ -168,11 +183,23 @@ struct TrackView: View {
             state.status = .starting
             state.collector = nil
             state.lineUpPhase = .idle
+            state.recorder = nil
+            state.recordPhase = .idle
         }
         .task(id: headName) {
             mesh = nil
             guard let head else { return }
             mesh = try? await Task.detached(priority: .userInitiated) { try HeadMesh.build(head) }.value
+        }
+        .sheet(item: $lastRun) { run in
+            TrackRunSheet(run: run)
+        }
+        .alert("Name This Test", isPresented: $askingLabel) {
+            TextField("e.g. still-left-30", text: $customLabel)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+            Button("Record") { startRecording(customLabel.isEmpty ? "custom" : customLabel) }
+            Button("Cancel", role: .cancel) {}
         }
         .alert(message?.title ?? "", isPresented: Binding(get: { message != nil },
                                                           set: { if !$0 { message = nil } })) {
@@ -332,6 +359,25 @@ struct TrackView: View {
 
     @ViewBuilder
     private var lineUpOverlay: some View {
+        switch state.recordPhase {
+        case .idle:
+            EmptyView()
+        case .countdown(let n):
+            VStack(spacing: 8) {
+                Text("Get ready: \(state.recordLabel)")
+                Text("\(n)").font(.system(size: 64, weight: .bold).monospacedDigit())
+            }
+            .padding(24)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        case .recording:
+            VStack(spacing: 8) {
+                Text("Recording: \(state.recordLabel)")
+                ProgressView(value: state.recordProgress)
+                    .frame(width: 180)
+            }
+            .padding(24)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        }
         switch state.lineUpPhase {
         case .idle:
             EmptyView()
@@ -387,13 +433,41 @@ struct TrackView: View {
 
                 Spacer()
 
+                Menu {
+                    Section("Record 10 s of tracking") {
+                        ForEach(Self.testLabels, id: \.0) { label, hint in
+                            Button {
+                                startRecording(label)
+                            } label: {
+                                Text(label)
+                                Text(hint)
+                            }
+                        }
+                        Button("Custom name…") {
+                            customLabel = ""
+                            askingLabel = true
+                        }
+                    }
+                    if FileManager.default.fileExists(atPath: TrackLog.url.path) {
+                        ShareLink(item: TrackLog.url) {
+                            Label("Share Test Log", systemImage: "square.and.arrow.up")
+                        }
+                    }
+                } label: {
+                    Label("Record", systemImage: "record.circle")
+                }
+                .buttonStyle(.bordered)
+                .disabled(head?.lineUp == nil || state.status != .tracking
+                          || state.recordPhase != .idle || state.lineUpPhase != .idle)
+
                 Button {
                     startLineUp()
                 } label: {
-                    Label(head?.lineUp == nil ? "Line Up" : "Line Up Again", systemImage: "scope")
+                    Label("Line Up", systemImage: "scope")
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(head == nil || state.status != .tracking || state.lineUpPhase != .idle)
+                .disabled(head == nil || state.status != .tracking || state.lineUpPhase != .idle
+                          || state.recordPhase != .idle)
             }
 
             HStack(spacing: 6) {
@@ -511,6 +585,48 @@ struct TrackView: View {
                change.noseMillimeters, change.backMillimeters, change.topMillimeters, change.degrees)
     }
 
+    // MARK: Test recording
+
+    /// Ready-made test names, with what to do during each.
+    static let testLabels: [(String, String)] = [
+        ("still-front", "Look straight at the phone, keep still"),
+        ("still-left-45", "Turned 45° to your left, keep still"),
+        ("still-right-45", "Turned 45° to your right, keep still"),
+        ("expressions", "Head still; smile, talk, open mouth, raise brows"),
+        ("turning", "Turn slowly left and right"),
+        ("nodding", "Nod slowly up and down"),
+    ]
+
+    /// 3-2-1, then records 10 s, then shows the results and adds them to the log.
+    private func startRecording(_ label: String) {
+        guard let head else { return }
+        state.recordLabel = label
+        Task {
+            for n in stride(from: 3, through: 1, by: -1) {
+                state.recordPhase = .countdown(n)
+                try? await Task.sleep(for: .seconds(1))
+            }
+            let recorder = TrackRecorder(label: label)
+            state.recorder = recorder
+            state.recordPhase = .recording
+            while !recorder.isDone {
+                try? await Task.sleep(for: .milliseconds(100))
+                if state.recorder !== recorder { return }   // tab was left
+                state.recordProgress = recorder.progress
+            }
+            state.recorder = nil
+            state.recordPhase = .idle
+            state.recordProgress = 0
+            let summary = recorder.summary(head: head.name, fixOn: state.depthFixOn, smoothOn: state.smoothOn)
+            do {
+                try TrackLog.append(summary)
+            } catch {
+                message = ("Couldn't Save Log", error.localizedDescription)
+            }
+            lastRun = summary
+        }
+    }
+
     private func finish(title: String, text: String) {
         state.lineUpPhase = .idle
         message = (title, text)
@@ -599,20 +715,22 @@ struct FaceTrackingView: UIViewRepresentable {
 
         /// The head's pose in world space for this frame: Apple's face pose, the line-up offset,
         /// the depth correction (Fix), then smoothing (Smooth).
-        private func updateHeadPose(face: simd_float4x4, time: TimeInterval) {
+        private func updateHeadPose(face: simd_float4x4, time: TimeInterval, expression: Float) {
             guard let headToFace else {
                 state.headWorld = nil
                 filter.reset()
                 return
             }
-            var world = face * headToFace
-            if state.depthFixOn, let correction = state.fixCorrection { world = world * correction }
-            if state.smoothOn {
-                world = filter.update(world, time: time)
-            } else {
-                filter.reset()
+            let apple = face * headToFace
+            let fixed = apple * (state.fixCorrection ?? matrix_identity_float4x4)
+            let unsmoothed = state.depthFixOn ? fixed : apple
+            let smoothed = filter.update(unsmoothed, time: time)
+            state.headWorld = state.smoothOn ? smoothed : unsmoothed
+            if let recorder = state.recorder {
+                let view = state.cameraView
+                recorder.add(RecordedPose(apple: view * apple, fixed: view * fixed, smooth: view * smoothed),
+                             expression: expression)
             }
-            state.headWorld = world
         }
 
         func setHead(mesh: HeadMesh?, key: String?, headToFace: simd_float4x4?, visible: Bool, opacity: Double,
@@ -663,14 +781,15 @@ struct FaceTrackingView: UIViewRepresentable {
                     state.status = .tracking
                     state.pose = HeadPose(transform: transform)
                     state.cameraView = view
-                    if let faceWorld { updateHeadPose(face: faceWorld, time: time) }
+                    if let faceWorld { updateHeadPose(face: faceWorld, time: time, expression: expression) }
                     placeHead()
                     state.updateCount += 1
                     if let collector = state.collector, !collector.isDone, let face {
                         collector.add(vertices: face.geometry.vertices, pose: transform, expression: expression)
                         state.collectProgress = collector.progress
                     }
-                    if state.depthCheckOn || state.depthFixOn, let face, let depth = frame.capturedDepthData,
+                    if state.depthCheckOn || state.depthFixOn || state.recorder != nil,
+                       let face, let depth = frame.capturedDepthData,
                        let checker, let headToFace {
                         let input = DepthCheckInput(depth: depth,
                                                     intrinsics: frame.camera.intrinsics,
@@ -681,13 +800,14 @@ struct FaceTrackingView: UIViewRepresentable {
                                                         let w = face.transform * SIMD4(v, 1)
                                                         return SIMD3(w.x, w.y, w.z)
                                                     },
-                                                    correct: state.depthFixOn)
+                                                    correct: state.depthFixOn || state.recorder != nil)
                         checker.submit(input) { result in
                             Task { @MainActor in self.show(result) }
                         }
                     }
                 } else if state.status != .unsupported {
                     state.status = .noFace
+                    state.recorder?.addLostFrame()
                     state.headWorld = nil
                     filter.reset()
                     placeHead()
@@ -704,7 +824,8 @@ struct FaceTrackingView: UIViewRepresentable {
         /// Shows a measured depth frame: the numbers, and the points colored by signed distance
         /// from the head's surface (green = on it, blue = inside, red = outside).
         private func show(_ result: DepthCheckFrame) {
-            if state.depthFixOn {
+            state.recorder?.add(result)
+            if state.depthFixOn || state.recorder != nil {
                 state.fixRms = result.snapRms
                 state.fixPoints = result.snapPoints
                 if let c = result.correction {
@@ -787,6 +908,46 @@ struct FaceTrackingView: UIViewRepresentable {
                   let geometry = maskNode.geometry as? ARSCNFaceGeometry else { return }
             geometry.update(from: face.geometry)
             maskNode.isHidden = !maskVisible
+        }
+    }
+}
+
+// MARK: - Test results
+
+/// The results of one test run, with a button to share the whole log.
+struct TrackRunSheet: View {
+    let run: TrackRunSummary
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                Text(run.text)
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                Text("""
+                Spread = how far it wanders from its average spot. Jitter = how far it moves \
+                from one frame to the next. "back" is a point at the back of the head, about \
+                15 cm behind the center. Saved to Files → BarBot → TrackLogs → track-log.csv.
+                """)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+            }
+            .navigationTitle("Test: \(run.label)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    ShareLink(item: TrackLog.url) {
+                        Label("Share Log", systemImage: "square.and.arrow.up")
+                    }
+                }
+            }
         }
     }
 }
