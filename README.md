@@ -19,6 +19,8 @@ sitting flat on the head, in the right place, with the guard at the right length
 > are placeholders for now). **BarBot** is our **developer test app**: it shows all the engineering (raw
 > numbers, error maps, test logs) so we can measure what works. See [ios/README.md](ios/README.md).
 
+**Build book (drawings, parts, wiring, safety, plan):** [view online](https://claude.ai/artifact/Dp9PoMTY2UsaEqChMMuXZ6) · source in [`docs/build-book.html`](docs/build-book.html)
+
 ## How it knows where the cutter is on the head
 
 Full explanation: **[docs/cutter-tracking.md](docs/cutter-tracking.md)**. In short, three things work together:
