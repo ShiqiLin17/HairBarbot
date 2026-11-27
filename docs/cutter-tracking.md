@@ -117,4 +117,4 @@ Things to settle:
 - **Guard speed vs. workflow:** with D2.2 (~5 mm/s) the user waits while the guard adjusts at a new region.
   Fine if the length only changes between regions (Carlos's question 1).
 - **Hardware list:** this code follows Carlos's sensor box (XIAO ESP32-S3 + BNO085). Our scrum email to
-  Prof. Sebesta asked for a BNO055 and a Maker-ESP32 board, so we should confirm which parts we're actually using.
+  Prof. Sebesta mentioned other parts, but the course isn't ordering for us, so we use what we have; adjust the pins and IMU library if the parts on hand differ.

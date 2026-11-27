@@ -65,8 +65,8 @@ tools/flame/                   converts the FLAME head model for the iPhone app
 docs/cutter-tracking.md        how the cutter is located (IMU + force pads + tags), iPhone hand-off, open questions
 docs/guard-drive-options.pdf   Carlos's comparison of the guard drives (D2.2 screw, C3 and C4 scissors)
 docs/ios-test-log.md           results of hands-on iPhone app tests
-docs/budget.xlsx               parts list + budget (from the roller design; needs updating)
-docs/build-book.html           older roller-design build book (drawings, plan); see the note at its top
+docs/budget.xlsx               parts list + budget (pick-and-place design)
+docs/build-book.html           build book: drawings, parts, wiring, safety, 5-week plan (open in a browser)
 design/                        user-app brand: style guide, color tokens (Swift + CSS), app icon; see design/README.md
 AGENTS.md                      pointers for AI agents (UI work -> design/)
 ```
