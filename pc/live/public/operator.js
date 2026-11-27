@@ -1,4 +1,4 @@
-// HairBarbot operator dashboard (handheld): sensors, guard tracking, coverage, calibration, controls.
+// HairBarbot operator dashboard: sensors, cutter location (IMU + tags), guard tracking, coverage, calibration, controls.
 import { createHeadView } from "./head3d.js";
 
 const $ = (s) => document.querySelector(s);
@@ -59,8 +59,8 @@ function drawChart(canvas, series, { min, max, band, limit }) {
   });
 }
 function charts() {
-  drawChart($("#guardChart"), [{ key: "need", color: css("--accent") }, { key: "guard", color: css("--data") }], { min: 0, max: 60, band: { key: "need", w: 1.5 } });
-  drawChart($("#tofChart"), [{ key: "speed", color: css("--data") }, { key: "minLine", color: css("--muted") }], { min: 0, max: 80 });
+  drawChart($("#guardChart"), [{ key: "need", color: css("--accent") }, { key: "guard", color: css("--data") }], { min: 10, max: 46, band: { key: "need", w: 1.0 } });
+  drawChart($("#padChart"), [{ key: "padA", color: css("--data") }, { key: "padB", color: css("--accent") }, { key: "padOn", color: css("--muted") }], { min: 0, max: 2500 });
   requestAnimationFrame(charts);
 }
 requestAnimationFrame(charts);
@@ -75,7 +75,9 @@ function toast(text) {
 function cmd(action, body) { socket.emit("cmd", { action, body }, (r) => { if (!r || !r.ok) toast((r && r.error) || "Command failed."); }); }
 const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
 const yes = (b, a = "yes", n = "no") => `<span class="${b ? "good" : "bad"}">${b ? a : n}</span>`;
-const BLOCKS = { trigger: "trigger released", zone: "near face/ears", guard: "guard adjusting", sensors: "no location", estop: "E-stop" };
+const BLOCKS = { trigger: "trigger released", zone: "near face/ears", guard: "guard adjusting", sensors: "no location",
+                 estop: "E-stop", contact: "not seated (both pads must press)", unsure: "tags and IMU disagree",
+                 camera: "face out of view" };
 
 // ---------------------------------------------------------------- render
 function render(s) {
@@ -99,6 +101,7 @@ function render(s) {
   // location + guard
   $("#loc").innerHTML = `
     <span>Area</span><span>${loc ? loc.region : "--"}</span>
+    <span>Located by</span><span>${live.source === "tags" ? "camera tags" : live.source === "imu" ? "IMU" : "--"}</span>
     <span>Yaw (around)</span><span>${loc ? loc.yaw.toFixed(1) + "°" : "--"}</span>
     <span>Pitch (down)</span><span>${loc ? loc.pitch.toFixed(1) + "°" : "--"}</span>
     <span>Allowed zone</span><span>${loc ? yes(loc.in_zone, "yes", "NO (face/ears)") : "--"}</span>
@@ -107,17 +110,18 @@ function render(s) {
     <span>Guard error</span><span>${live.need_guard != null ? live.guard_err.toFixed(2) + " mm" : "--"}</span>`;
 
   const now = performance.now() / 1000;
-  hist.push({ t: now, guard: m.guard, need: live.need_guard, speed: m.enc_ok ? Math.abs(live.speed || 0) : null, minLine: 5 });
+  const fsr = m.fsr || [0, 0];
+  hist.push({ t: now, guard: m.guard, need: live.need_guard, padA: fsr[0], padB: fsr[1], padOn: live.fsr_on });
   while (hist.length && hist[0].t < now - 32) hist.shift();
 
   // sensors
   $("#sensors").innerHTML = `
     <span>Orientation IMU</span><span>${yes(m.imu_ok, "ok", "MISSING")}</span>
-    <span>Roller encoder</span><span>${yes(m.enc_ok, "ok", "MISSING")}</span>
-    <span>Rolled (counter)</span><span>${m.rolled.toFixed(0)} mm</span>
-    <span>Roller speed</span><span>${live.speed != null ? Math.abs(live.speed).toFixed(0) + " mm/s" : "--"}</span>
-    <span>Rolling on head</span><span>${live.rolling ? "yes" : "no"}</span>
-    <span>Cut distance</span><span>${live.cut_distance != null ? (live.cut_distance / 10).toFixed(0) + " cm" : "--"}</span>
+    <span>Guard drive</span><span>${yes(m.drive_ok, "ok", "JAMMED")}</span>
+    <span>Force pads</span><span>${fsr[0]} / ${fsr[1]}</span>
+    <span>Seated on head</span><span>${live.seated ? '<span class="good">yes</span>' : "no"}</span>
+    <span>Placements</span><span>${live.placements ?? "--"}</span>
+    <span>Clipper time</span><span>${live.cut_time != null ? live.cut_time.toFixed(0) + " s" : "--"}</span>
     <span>Trigger</span><span>${m.trigger ? "held" : "released"}</span>
     <span>Permit lease</span><span>${m.permit ? "active" : "off"}</span>
     <span>Clipper</span><span>${m.clipper ? '<span class="bad">ON</span>' : "off"}</span>
@@ -144,7 +148,7 @@ function render(s) {
   $("#calFin").disabled = st !== "CALIBRATING";
 
   // head shape + camera
-  const cam = s.camera || {}, hd = s.head;
+  const cam = s.camera || {}, hd = s.head, tg = live.tags || {};
   $("#headInfo").innerHTML = `
     <span>Head shape</span><span>${hd ? hd.label + (hd.scan ? " (3D scan)" : "") : "--"}</span>
     <span>Circumference</span><span>${hd ? (hd.circumference / 10).toFixed(1) + " cm" : "--"}</span>
@@ -152,7 +156,10 @@ function render(s) {
     <span>Face seen</span><span>${cam.enabled ? yes(cam.found, "yes", "NO") : "--"}</span>
     <span>Head turned</span><span>${cam.enabled && cam.yaw != null ? cam.yaw.toFixed(0) + "°" : "--"}</span>
     <span>Following head</span><span>${cam.enabled ? (cam.active ? "yes" : "after calibration") : "no (keep head still)"}</span>
-    <span>Forehead line</span><span>${cam.forehead_limit != null ? cam.forehead_limit.toFixed(0) + "° (yours)" : "average"}</span>`;
+    <span>Forehead line</span><span>${cam.forehead_limit != null ? cam.forehead_limit.toFixed(0) + "° (yours)" : "average"}</span>
+    <span>Cutter tags</span><span>${tg.seen ? `<span class="good">seen</span> (${tg.tags}, ${tg.source})` : tg.last_seen_s != null ? `last ${tg.last_seen_s} s ago` : "not seen yet"}</span>
+    <span>IMU correction</span><span>${tg.imu_correction_deg != null ? tg.imu_correction_deg + "° (" + tg.corrections + " sightings)" : "--"}</span>
+    <span>Tags vs IMU</span><span>${tg.disagree_deg != null ? tg.disagree_deg + "°" : "--"}</span>`;
   $("#camImg").hidden = !cam.enabled || cam.simulated;
   $("#camNote").textContent = !cam.enabled ? "No camera. Start the controller with --camera 0 to follow head turns."
     : cam.simulated ? "Simulated camera (no video). Use \"Turn head\" to test." : "";
@@ -186,6 +193,8 @@ $("#defBtn").onclick = () => cmd("calibDefault");
 $("#trigBtn").onclick = () => cmd("simTrigger");
 $("#faceBtn").onclick = () => cmd("simFace");
 let turnSign = 1;
+$("#liftBtn").onclick = () => cmd("simLift");
+$("#tagsBtn").onclick = () => cmd("simHideTags");
 $("#turnBtn").onclick = () => { cmd("simTurnHead", { deg: 30 * turnSign }); turnSign = turnSign > 0 ? 0 : 1; };
 setInterval(() => {
   if (state && state.camera && state.camera.enabled && !state.camera.simulated) $("#camImg").src = "/camera.jpg?t=" + Date.now();

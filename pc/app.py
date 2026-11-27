@@ -4,7 +4,9 @@
   python app.py --port COM3    # real board (Windows), or --port /dev/cu.usbserial-XXXX (Mac)
 
 Head shape (--head): female | male | "57 cm" (your circumference) | vision/profiles/<name>.json (3D scan).
-Default: average adult head. Camera head tracking: --camera 0 (webcam index). In --sim it's simulated.
+Default: average adult head. Camera head + cutter-tag tracking: --camera 0 (webcam index). In --sim it's simulated.
+
+The iPhone app can send where IT sees the cutter's tags: POST /api/cutter (see docs/cutter-tracking.md).
 """
 import argparse
 import logging
@@ -35,15 +37,16 @@ def make_profile(spec):
     return personalized_profile(check_circumference(parse_length(spec)))
 
 
-def create_app(sim=True, port=None, speedup=1.0, head=None, camera=None, sim_camera=True):
+def create_app(sim=True, port=None, speedup=1.0, head=None, camera=None, sim_camera=True, sim_tags=True,
+               imu_drift=2.0):
     profile = make_profile(head)
     cam = None
     if sim:
         from serial_link import SimLink
-        link = SimLink(speedup=speedup, profile=profile)
+        link = SimLink(speedup=speedup, profile=profile, imu_drift_deg_per_min=imu_drift)
         if sim_camera:
             from camera_head import SimCameraHead
-            cam = SimCameraHead(link)
+            cam = SimCameraHead(link, tags=sim_tags)
     else:
         from serial_link import SerialLink
         link = SerialLink(port or config.SERIAL_PORT)
@@ -88,6 +91,31 @@ def create_app(sim=True, port=None, speedup=1.0, head=None, camera=None, sim_cam
             raise ControllerError("Only in simulation.")
         deg = float((request.get_json(silent=True) or {}).get("deg", 30))
         ctl.link.sim_turn_head(deg)
+        return ok()
+
+    @app.post("/api/cutter")
+    def cutter():
+        """A cutter sighting from another camera (the iPhone app). JSON:
+        {"point_mm": [x, y, z], "axis": [x, y, z], "age_s": 0.03, "tags": 2}
+        point_mm = center of the cutter's scalp face, axis = direction it points INTO the scalp, both in
+        HairBarbot head axes (x nose, y client's left, z up, origin = head center, mm)."""
+        b = request.get_json(force=True)
+        accepted = ctl.add_sighting(b["point_mm"], b["axis"], float(b.get("age_s", 0.0)), "iphone",
+                                    int(b.get("tags", 1)))
+        return jsonify({"ok": True, "accepted": bool(accepted)})
+
+    @app.post("/api/sim/lift")
+    def sim_lift():
+        if not ctl.sim:
+            raise ControllerError("Only in simulation.")
+        ctl.link.sim_lift()
+        return ok()
+
+    @app.post("/api/sim/hide_tags")
+    def sim_hide_tags():
+        if not ctl.sim or not hasattr(ctl.camera, "tags_hidden"):
+            raise ControllerError("Only in simulation with the simulated camera.")
+        ctl.camera.tags_hidden = not ctl.camera.tags_hidden
         return ok()
 
     @app.get("/api/styles")
@@ -172,9 +200,11 @@ if __name__ == "__main__":
     ap.add_argument("--head", help='head shape: female, male, "57 cm", or a scan .json (default: average adult)')
     ap.add_argument("--camera", type=int, help="webcam index for camera head tracking, e.g. 0")
     ap.add_argument("--no-sim-camera", action="store_true", help="simulation without the simulated camera")
+    ap.add_argument("--no-sim-tags", action="store_true", help="simulation: the camera doesn't see the cutter's tags")
+    ap.add_argument("--imu-drift", type=float, default=2.0, help="simulation: IMU heading drift, deg per minute")
     a = ap.parse_args()
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
     app = create_app(sim=a.sim, port=a.port, speedup=a.speedup, head=a.head, camera=a.camera,
-                     sim_camera=not a.no_sim_camera)
+                     sim_camera=not a.no_sim_camera, sim_tags=not a.no_sim_tags, imu_drift=a.imu_drift)
     print(f"HairBarbot controller on http://localhost:{a.http}  ({'SIMULATION' if a.sim else 'REAL BOARD'})")
     app.run(host="127.0.0.1", port=a.http, threaded=True)

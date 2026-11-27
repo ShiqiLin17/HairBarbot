@@ -1,4 +1,4 @@
-// Live 3D head view shared by the client app and the operator dashboard (handheld HairBarbot with rollers).
+// Live 3D head view shared by the client app and the operator dashboard (HairBarbot cutter placed spot by spot).
 // Head frame (same as the Python code): x forward (nose), y to the client's LEFT, z up.
 // Three.js frame: X = client's left, Y = up, Z = toward the face. 1 three.js unit = 100 mm.
 import * as THREE from "three";
@@ -114,16 +114,15 @@ export function createHeadView(container, { follow = true, gmin = 3, gmax = 60 }
   neck.position.set(0, -1.15, -0.1);
   scene.add(neck);
 
-  // ---- the handheld device: two rollers on the moving carriage, Flowbee head, handle with hose
+  // ---- the cutter: outer guard with two force pads, Flowbee head, handle with hose
   const clipper = new THREE.Group();
   const bodyMat = new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.5 });
   const accentMat = new THREE.MeshStandardMaterial({ color: 0xffb020, roughness: 0.35, emissive: 0x000000 });
-  const comb = new THREE.Group();   // rollers + carriage plate
-  [-0.15, 0.15].forEach((x) => {
-    const roller = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.09, 20), accentMat);
-    roller.rotation.x = Math.PI / 2;
-    roller.position.set(x, 0.06, 0);
-    comb.add(roller);
+  const comb = new THREE.Group();   // outer guard face + the two force pads (top-left, bottom-right)
+  [[-0.15, -0.05], [0.15, 0.05]].forEach(([x, z]) => {
+    const pad = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.03, 20), accentMat);
+    pad.position.set(x, 0.1, z);
+    comb.add(pad);
   });
   const plate = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.03, 0.16), accentMat);
   plate.position.y = 0.13;
@@ -164,7 +163,7 @@ export function createHeadView(container, { follow = true, gmin = 3, gmax = 60 }
       if (p > 112 || (lengthsGrid && v == null)) tmp.copy(SKIN);
       else if (!lengthsGrid) tmp.copy(UNCUT);
       else if (!showFinished && !(cover && gridLookup(cover, y, p, false) === 1)) tmp.copy(UNCUT);
-      else tmp.copy(HAIR_SHORT).lerp(HAIR_LONG, Math.pow((v - gmin) / (gmax - gmin), 0.7));
+      else tmp.copy(HAIR_SHORT).lerp(HAIR_LONG, Math.pow(Math.max(0, Math.min(1, (v - gmin) / (gmax - gmin))), 0.7));
       col.setXYZ(i, tmp.r, tmp.g, tmp.b);
     }
     col.needsUpdate = true;
@@ -246,6 +245,6 @@ export function createHeadView(container, { follow = true, gmin = 3, gmax = 60 }
   return api;
 }
 
-export function lengthColor(v, gmin = 3, gmax = 60) {
-  return "#" + HAIR_SHORT.clone().lerp(HAIR_LONG, Math.pow((v - gmin) / (gmax - gmin), 0.7)).getHexString();
+export function lengthColor(v, gmin = 12.7, gmax = 44.45) {
+  return "#" + HAIR_SHORT.clone().lerp(HAIR_LONG, Math.pow(Math.max(0, Math.min(1, (v - gmin) / (gmax - gmin))), 0.7)).getHexString();
 }

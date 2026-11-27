@@ -79,7 +79,7 @@ def test_scalp_is_above_the_face_and_drawn():
     assert np.mean([y for _, y, *_ in e.scalp_px]) < eye_y          # scalp is above the eyes
     assert e.crown_px and e.crown_px[1] < eye_y
     lengths = [L for *_, L in e.scalp_px]
-    assert max(lengths) == 50 and min(lengths) < 30                  # fade 2 -> 5 cm shows on the head
+    assert max(lengths) == 40 and min(lengths) < 30                  # fade 2 -> 4 cm shows on the head
     out = draw(frame, e, K, "fade25", mirror=True)
     assert out.shape == frame.shape
 

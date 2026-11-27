@@ -23,7 +23,9 @@ def wait(c, cond, timeout=30):
 
 
 def ready(sim_camera=True, head=None):
-    app = create_app(sim=True, speedup=20, head=head, sim_camera=sim_camera)
+    # IMU-only location here (no cutter tags, no drift): these tests check the camera's HEAD tracking.
+    # The tags are tested in test_cutter_tracking.py.
+    app = create_app(sim=True, speedup=20, head=head, sim_camera=sim_camera, sim_tags=False, imu_drift=0.0)
     c = app.test_client()
     c.post("/api/home")
     wait(c, lambda s: s["state"] == "IDLE")

@@ -16,6 +16,7 @@ from orientation import max_pitch
 REGIONS = ["top", "front", "sides", "back", "nape"]
 
 STYLES = {
+    # Lengths must fit the guard's range (config.GUARD_MIN..GUARD_MAX = 1/2" to 1-3/4", 12.7..44.45 mm).
     "even20": {
         "name": "Even 2 cm",
         "desc": "2 cm all over. A simple, tidy trim.",
@@ -23,33 +24,33 @@ STYLES = {
         "fade_to": None,
     },
     "fade25": {
-        "name": "Fade 2 cm → 5 cm",
-        "desc": "5 cm on top, fading down to 2 cm at the neck and sides.",
-        "lengths": {"top": 50, "front": 50, "sides": 50, "back": 50, "nape": 20},
+        "name": "Fade 2 cm → 4 cm",
+        "desc": "4 cm on top, fading down to 2 cm at the neck and sides.",
+        "lengths": {"top": 40, "front": 40, "sides": 40, "back": 40, "nape": 20},
         "fade_to": 20,
     },
     "buzz": {
-        "name": "Buzz cut",
-        "desc": "Same length everywhere. Simplest and fastest.",
-        "lengths": {"top": 9, "front": 9, "sides": 9, "back": 9, "nape": 9},
+        "name": "Short all over",
+        "desc": "The shortest guard (1.3 cm) everywhere. Simplest and fastest.",
+        "lengths": {"top": 13, "front": 13, "sides": 13, "back": 13, "nape": 13},
         "fade_to": None,
     },
     "classic": {
         "name": "Classic short",
         "desc": "Longer on top, short and tidy on the sides and back.",
-        "lengths": {"top": 25, "front": 25, "sides": 12, "back": 12, "nape": 9},
+        "lengths": {"top": 28, "front": 28, "sides": 16, "back": 16, "nape": 13},
         "fade_to": None,
     },
     "fade": {
         "name": "Fade",
-        "desc": "Longer on top, sides and back fade down to very short at the bottom.",
-        "lengths": {"top": 25, "front": 25, "sides": 16, "back": 16, "nape": 6},
-        "fade_to": 4,
+        "desc": "Longer on top, sides and back fade down to the shortest guard at the bottom.",
+        "lengths": {"top": 30, "front": 30, "sides": 20, "back": 20, "nape": 13},
+        "fade_to": 13,
     },
     "trim": {
         "name": "Long trim",
         "desc": "Takes a little off a longer haircut and evens it out.",
-        "lengths": {"top": 40, "front": 35, "sides": 30, "back": 30, "nape": 22},
+        "lengths": {"top": 44, "front": 40, "sides": 35, "back": 35, "nape": 25},
         "fade_to": None,
     },
 }
@@ -85,7 +86,7 @@ def validate_lengths(lengths: dict) -> dict:
             raise ValueError(f"missing length for {r}")
         v = float(lengths[r])
         if not config.GUARD_MIN <= v <= config.GUARD_MAX:
-            raise ValueError(f"{r} length must be {config.GUARD_MIN:.0f}-{config.GUARD_MAX:.0f} mm")
+            raise ValueError(f"{r} length must be {config.GUARD_MIN:g}-{config.GUARD_MAX:g} mm")
         out[r] = v
     return out
 

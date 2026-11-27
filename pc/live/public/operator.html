@@ -92,11 +92,13 @@
         <button class="b" id="trigBtn">Toggle trigger (sim)</button>
         <button class="b" id="faceBtn">Drift to face (sim)</button>
         <button class="b" id="turnBtn">Turn head 30° / back (sim)</button>
+        <button class="b" id="liftBtn">Lift cutter (sim)</button>
+        <button class="b" id="tagsBtn">Hide / show tags (sim)</button>
       </div>
     </div>
     <div class="card">
       <h2>Sensor calibration <span id="calTxt"></span></h2>
-      <p class="small">User sits upright facing forward. For each spot, press the rollers against the head pointing straight at it, keep still, and press Record. 3 or more spots.</p>
+      <p class="small">User sits upright facing forward. For each spot, place the cutter flat on the head (both pads touching), keep still, and press Record. 3 or more spots.</p>
       <div class="btns"><button class="b" id="calStart">Start calibration</button></div>
       <ul class="pts" id="pts"></ul>
       <div class="btns"><button class="b primary" id="calFin">Finish calibration</button></div>
@@ -110,14 +112,14 @@
       <div class="kv" id="loc"></div>
     </div>
     <div class="card">
-      <h2>Wrong-spot check · guard vs this spot</h2>
+      <h2>Wrong-spot check · guard vs this spot (mm)</h2>
       <canvas class="chart" id="guardChart"></canvas>
-      <div class="legend"><span><i style="background:var(--data)"></i>actual guard</span><span><i style="background:var(--accent)"></i>needed here</span><span><i style="background:color-mix(in srgb, var(--accent) 25%, transparent);height:8px"></i>±1.5 mm allowed</span></div>
+      <div class="legend"><span><i style="background:var(--data)"></i>actual guard</span><span><i style="background:var(--accent)"></i>needed here</span><span><i style="background:color-mix(in srgb, var(--accent) 25%, transparent);height:8px"></i>±1 mm allowed</span></div>
     </div>
     <div class="card">
-      <h2>Roller · speed on the head</h2>
-      <canvas class="chart" id="tofChart"></canvas>
-      <div class="legend"><span><i style="background:var(--data)"></i>roller speed (mm/s)</span><span><i style="background:var(--muted)"></i>"rolling" threshold</span></div>
+      <h2>Force pads · is the cutter on the head?</h2>
+      <canvas class="chart" id="padChart"></canvas>
+      <div class="legend"><span><i style="background:var(--data)"></i>pad A (top-left)</span><span><i style="background:var(--accent)"></i>pad B (bottom-right)</span><span><i style="background:var(--muted)"></i>"pressed" threshold</span></div>
     </div>
   </div>
 

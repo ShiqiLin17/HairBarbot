@@ -7,15 +7,15 @@ import time
 import numpy as np
 
 import config
-from orientation import direction, matrix_to_quat, max_pitch
+from orientation import matrix_to_quat, max_pitch
 
 STATE_NAMES = {0: "NOT_HOMED", 1: "HOMING", 2: "READY", 4: "FAULT"}
 
 
 def _empty_status():
-    return {"q": (1.0, 0.0, 0.0, 0.0), "rolled": 0.0, "guard": config.GUARD_MAX, "target": config.GUARD_MAX,
+    return {"q": (1.0, 0.0, 0.0, 0.0), "fsr": (0, 0), "guard": config.GUARD_MAX, "target": config.GUARD_MAX,
             "state": 0, "state_name": "NOT_HOMED", "homed": False, "clipper": False, "vacuum": False,
-            "estop_ok": True, "enc_ok": False, "imu_ok": False, "trigger": False, "permit": False, "age": 99.0}
+            "estop_ok": True, "drive_ok": False, "imu_ok": False, "trigger": False, "permit": False, "age": 99.0}
 
 
 class LinkBase:
@@ -88,13 +88,14 @@ class SerialLink(LinkBase):
     def _parse(self, line):
         if line.startswith("ST "):
             p = line.split()
-            if len(p) != 10:
+            # ST qw qx qy qz fsrA fsrB guard target state flags
+            if len(p) != 11:
                 return
             try:
-                f = int(p[9])
-                self._set_status(q=tuple(float(x) for x in p[1:5]), rolled=float(p[5]), guard=float(p[6]),
-                                 target=float(p[7]), state=int(p[8]), homed=bool(f & 1), clipper=bool(f & 2),
-                                 vacuum=bool(f & 4), estop_ok=bool(f & 8), enc_ok=bool(f & 16), imu_ok=bool(f & 32),
+                f = int(p[10])
+                self._set_status(q=tuple(float(x) for x in p[1:5]), fsr=(int(p[5]), int(p[6])), guard=float(p[7]),
+                                 target=float(p[8]), state=int(p[9]), homed=bool(f & 1), clipper=bool(f & 2),
+                                 vacuum=bool(f & 4), estop_ok=bool(f & 8), drive_ok=bool(f & 16), imu_ok=bool(f & 32),
                                  trigger=bool(f & 64), permit=bool(f & 128))
             except ValueError:
                 pass
@@ -131,9 +132,6 @@ class SerialLink(LinkBase):
     def vacuum(self, on):
         self._write("V 1" if on else "V 0")
 
-    def zero_rolled(self):
-        self._write("Z")
-
     def stop(self):
         self._write("S")
 
@@ -165,31 +163,44 @@ def _axis_angle(axis, deg):
     return np.eye(3) + math.sin(t) * K + (1 - math.cos(t)) * K @ K
 
 
-def _sweep_path():
-    """A user's path over the head: passes front-to-back, each going from the crown down and back up."""
-    pts = []
+def _placements():
+    """Where the simulated user puts the cutter down, one spot after another: rows from the nape up to the
+    crown, each row going around the head. Spots are ~10 deg apart so each patch overlaps the last."""
+    spots = []
     flip = False
-    for yaw in np.arange(-170.0, 170.1, 8.0):
-        top = max_pitch(yaw) - 3.0
-        ps = list(np.arange(0.0, top + 0.1, 3.0))
-        pts += [(float(yaw), float(p)) for p in (ps[::-1] if flip else ps)]
+    for pitch in np.arange(100.0, -1.0, -10.0):
+        ring = 2 * math.pi * math.sin(math.radians(max(pitch, 1.0)))
+        n = max(1, int(math.ceil(ring * 180 / math.pi / 10.0)))
+        ys = [-180.0 + 360.0 * (k + 0.5) / n for k in range(n)]
+        if flip:
+            ys = ys[::-1]
         flip = not flip
-    return pts
+        for y in ys:
+            if pitch <= max_pitch(y) - 3.0:
+                spots.append((float(y), float(pitch)))
+    return spots
 
 
 class SimLink(LinkBase):
     """Fake board + fake user for testing with no hardware.
-    It generates real quaternions for a user facing some random direction in the room,
-    so the calibration math is exercised."""
-    GUARD_SPEED = 15.0   # mm/s, same as firmware
-    HAND_SPEED = 30.0    # deg/s along the head
 
-    def __init__(self, speedup=1.0, seed=1, profile=None):
+    The fake user faces a random direction in the room (so the calibration math is exercised) and cuts by
+    PLACING the cutter: put it down flat on a spot (both force pads pressed), wait for the guard if it's still
+    moving, cut for a moment, lift it, move to the next spot. The IMU's heading drifts slowly, like a real one
+    (BNO085 game rotation vector), which the camera's tag sightings correct."""
+    GUARD_SPEED = 5.5    # mm/s: Carlos's D2.2 screw drive, ~31.75 mm in 5-7 s
+    DWELL_S = 0.7        # time the user keeps the cutter on one spot with the clipper running
+    LIFT_S = 0.35        # time in the air moving to the next spot
+    LIFT_MM = 15.0       # how high the cutter is lifted between spots
+    FSR_PRESSED = 1500   # ADC counts with the cutter resting on the head
+
+    def __init__(self, speedup=1.0, seed=1, profile=None, imu_drift_deg_per_min=2.0):
         super().__init__()
         rnd = random.Random(seed)
+        self._rng = np.random.default_rng(seed)
         self.speedup = speedup
         from orientation import SurfaceLocator
-        self.surface = SurfaceLocator(profile)   # device is held flat: it points along the head's surface normal
+        self.surface = SurfaceLocator(profile)   # cutter is held flat: it points along the head's surface normal
         self.head_yaw = 0.0                       # the user turning their head (deg, + = to their left)
         self._turn = None                         # (start, end, t0, duration) of a head turn in progress
         # a webcam on the table in front of the user: room -> camera rotation (fixed)
@@ -198,6 +209,8 @@ class SimLink(LinkBase):
         self._head_to_cam_facing = head_to_cam_facing
         # the user faces a random direction in the room (head upright): M_true = room axes -> head axes
         self.M_true = _axis_angle([0, 0, 1], rnd.uniform(-180, 180)) @ _axis_angle([1, 0, 0], rnd.uniform(-5, 5))
+        self.drift_rate = imu_drift_deg_per_min / 60.0
+        self.drift = 0.0                          # IMU heading error so far (deg, about the room's vertical)
         self.state = 0
         self.homed = False
         self.guard_mm = config.GUARD_MAX
@@ -206,37 +219,59 @@ class SimLink(LinkBase):
         self.clip = False
         self.vac = False
         self.trigger = False
-        self.hand = (0.0, 0.0)          # where the "user" holds the clipper
-        self.auto = False               # user sweeping the head during a session
-        self.path = _sweep_path()
-        self.path_i = 0.0
+        self.hand = (0.0, 0.0)          # spot the cutter is over
+        self.seated = False             # resting flat on the head (both pads pressed)
+        self.tilt = 0.0                 # cutter tilted off flat (deg): one pad lifts
+        self.auto = False               # user placing the cutter spot by spot during a session
+        self.spots = _placements()
+        self.spot_i = 0
+        self._phase, self._phase_t = "lift", 0.0
+        self._from = (0.0, 0.0)
         self.roll = 0.0
-        self.rolled = 0.0
+        self.placements = 0
         self._home_until = None
         threading.Thread(target=self._run, daemon=True).start()
 
     # --- test hooks used by the controller in --sim
     def sim_place(self, yaw, pitch):
+        """Put the cutter down flat at (yaw, pitch) and hold it there."""
         self.auto = False
         self.hand = (yaw, pitch)
+        self.seated, self.tilt = True, 0.0
+
+    def sim_lift(self):
+        self.auto = False
+        self.seated = False
+
+    def sim_tilt(self, deg):
+        """Rock the cutter off flat (one pad lifts) while staying on the spot."""
+        self.tilt = float(deg)
 
     def sim_auto(self, on):
         self.auto = on
         self.trigger = on
         if on:
-            self.path_i = 0.0
+            self.spot_i = 0
+            self._phase, self._phase_t = "lift", 0.0
+            self._from = self.hand
 
     def sim_toggle_trigger(self):
         self.trigger = not self.trigger
         return self.trigger
 
     def sim_wander_to_face(self, seconds=2.0):
-        """User drifts toward the face for a moment (tests the no-cut zone)."""
+        """User puts the cutter down near the face for a moment (tests the no-cut zone)."""
         self._face_until = time.time() + seconds / self.speedup
 
     _face_until = 0.0
 
-    # --- physics
+    def sim_cutter_truth(self):
+        """Where the cutter really is (for the simulated camera): (scalp-face point mm, into-scalp axis), head axes."""
+        y, p = self.hand
+        n = self.surface.normal(y, p)
+        pt = self.surface.point(y, p) + n * (0.0 if self.seated else self.LIFT_MM)
+        return pt, -self._cutter_dir_head()
+
     # --- the user's head in the room
     def world_to_head(self):
         """room axes -> head axes right now (the head may be turned)."""
@@ -251,11 +286,66 @@ class SimLink(LinkBase):
         """The simulated user turns their head to `deg` (to their left = +) over `seconds`."""
         self._turn = (self.head_yaw, float(deg), time.time(), seconds / self.speedup)
 
+    def _cutter_dir_head(self):
+        """Outward direction through the cutter (head axes): the surface normal, tilted if the user rocks it."""
+        n = self.surface.normal(*self.hand)
+        if self.tilt:
+            side = np.cross(n, [0.0, 0.0, 1.0])
+            if np.linalg.norm(side) < 1e-6:
+                side = np.array([0.0, 1.0, 0.0])
+            n = _axis_angle(side, self.tilt) @ n
+        return n
+
     def _quat(self):
-        n_world = self.world_to_head().T @ self.surface.normal(*self.hand)
+        n_world = self.world_to_head().T @ self._cutter_dir_head()
         a = np.array(config.CLIP_AXIS, float)
         R = _axis_angle(-n_world, self.roll) @ _rot_from_to(a, -n_world)
+        R = _axis_angle([0, 0, 1], self.drift) @ R            # the IMU's heading has drifted
         return matrix_to_quat(R)
+
+    def _fsr(self):
+        if not self.seated:
+            return (int(self._rng.integers(0, 40)), int(self._rng.integers(0, 40)))
+        a = b = self.FSR_PRESSED
+        if abs(self.tilt) > 4:                                 # rocked: one pad comes off the head
+            b = 120
+        return (int(a + self._rng.normal(0, 40)), int(b + self._rng.normal(0, 40)))
+
+    def _user(self, now, dt):
+        """The fake user placing the cutter spot after spot."""
+        t = now - self._phase_t
+        if now < self._face_until:
+            self.hand, self.seated = (0.0, 75.0), True          # forehead / face: must not cut
+            return
+        if self._phase == "lift":
+            self.seated = False
+            target = self.spots[self.spot_i]
+            f = min(1.0, t * self.speedup / self.LIFT_S)
+            (y0, p0), (y1, p1) = self._from, target
+            dy = (y1 - y0 + 180.0) % 360.0 - 180.0
+            self.hand = (((y0 + dy * f) + 180.0) % 360.0 - 180.0, p0 + (p1 - p0) * f)
+            if f >= 1.0:
+                self._phase, self._phase_t = "place", now
+                self.placements += 1
+        elif self._phase == "place":
+            self.seated = True
+            # the app tells the user to hold still while the guard adjusts; the clipper starts when it can
+            if self.clip and t * self.speedup > 0.05:
+                self._phase, self._phase_t = "cut", now
+            elif t * self.speedup > 15.0:                     # never allowed here (e.g. zone): move on
+                self._next(now)
+        elif self._phase == "cut":
+            self.seated = True
+            if t * self.speedup >= self.DWELL_S:
+                self._next(now)
+
+    def _next(self, now):
+        self._from = self.hand
+        if self.spot_i < len(self.spots) - 1:
+            self.spot_i += 1
+        else:
+            self.spot_i = 0                                    # go around again until the app says done
+        self._phase, self._phase_t = "lift", now
 
     def _run(self):
         last = time.time()
@@ -265,43 +355,26 @@ class SimLink(LinkBase):
             dt = (now - last) * self.speedup
             last = now
             if self.state == 1 and now >= self._home_until:
-                self.homed, self.state, self.guard_mm, self.target_mm = True, 2, config.GUARD_MAX, config.GUARD_MAX
+                self.homed, self.state, self.guard_mm, self.target_mm = True, 2, config.GUARD_MIN, config.GUARD_MAX
                 self._done.set()
             if self.homed:
                 step = self.GUARD_SPEED * dt
                 d = self.target_mm - self.guard_mm
                 self.guard_mm += max(-step, min(step, d))
-            # simulated user
             if self._turn:
                 a, b, t0, dur = self._turn
                 f = min(1.0, (now - t0) / max(dur, 1e-6))
                 self.head_yaw = a + (b - a) * f
                 if f >= 1.0:
                     self._turn = None
+            self.drift += self.drift_rate * dt
             self.roll = 25.0 * math.sin(now * 0.7)          # wrist roll: must not affect the location
             if self.auto:
-                if now < self._face_until:
-                    self.hand = (0.0, 75.0)                 # forehead / face zone
-                elif abs(self.guard_mm - self.target_mm) > 1.0:
-                    pass                                    # user waits for the guard (the app says "slow down")
-                elif self.path_i < len(self.path) - 1:
-                    i0 = int(self.path_i)
-                    (y0, p0), (y1, p1) = self.path[i0], self.path[i0 + 1]
-                    seg = max(1e-6, math.hypot((y1 - y0) * math.sin(math.radians(max(p0, 10))), p1 - p0))
-                    self.path_i = min(len(self.path) - 1, self.path_i + self.HAND_SPEED * dt / seg)
-                    f = self.path_i - int(self.path_i)
-                    i0 = int(self.path_i)
-                    i1 = min(i0 + 1, len(self.path) - 1)
-                    (y0, p0), (y1, p1) = self.path[i0], self.path[i1]
-                    old = self.hand
-                    self.hand = (y0 + (y1 - y0) * f, p0 + (p1 - p0) * f)
-                    # roller: arc length on a ~100 mm head
-                    ang = math.degrees(math.acos(max(-1.0, min(1.0, float(direction(*old) @ direction(*self.hand))))))
-                    self.rolled += math.radians(ang) * 100.0
+                self._user(now, dt)
             self.clip = self.state == 2 and self.trigger and now < self.permit_until
-            self._set_status(q=self._quat(), rolled=round(self.rolled, 1), guard=round(self.guard_mm, 2),
+            self._set_status(q=self._quat(), fsr=self._fsr(), guard=round(self.guard_mm, 2),
                              target=round(self.target_mm, 2), state=self.state, homed=self.homed, clipper=self.clip,
-                             vacuum=self.vac, estop_ok=True, enc_ok=True, imu_ok=True, trigger=self.trigger,
+                             vacuum=self.vac, estop_ok=True, drive_ok=True, imu_ok=True, trigger=self.trigger,
                              permit=now < self.permit_until)
 
     # --- commands (same as SerialLink)
@@ -326,9 +399,6 @@ class SimLink(LinkBase):
 
     def vacuum(self, on):
         self.vac = on and self.state != 4
-
-    def zero_rolled(self):
-        self.rolled = 0.0
 
     def stop(self):
         if self.state != 4:

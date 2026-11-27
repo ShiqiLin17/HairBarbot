@@ -38,6 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))          # so we can import pc/ modules
 
 from orientation import max_pitch                   # noqa: E402  (same no-cut zones as the controller)
+import config                                       # noqa: E402
 from styles import STYLES, guard_length, region_name  # noqa: E402
 from head_profile import (ask_head_profile, average_profile, check_circumference,  # noqa: E402
                           load_profile, parse_length, personalized_profile)
@@ -257,7 +258,7 @@ def head_angles(R):
 
 
 # ---------------------------------------------------------------------- drawing
-def length_color(L, lo=3, hi=60):
+def length_color(L, lo=config.GUARD_MIN, hi=config.GUARD_MAX):
     """Short hair = light, long = dark (BGR). Matches the app's colors."""
     t = 0.0 if L is None else max(0.0, min(1.0, (L - lo) / (hi - lo))) ** 0.7
     a, b = np.array([178, 196, 216]), np.array([28, 33, 43])     # BGR of #d8c4b2 -> #2b211c

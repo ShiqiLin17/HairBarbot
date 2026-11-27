@@ -1,5 +1,7 @@
-"""The brain of the handheld HairBarbot: state machine, calibration, guard targeting, clipper permit,
+"""The brain of HairBarbot: state machine, calibration, where the cutter is, guard targeting, clipper permit,
 coverage tracking, and safety checks. Runs a 50 Hz loop.
+
+The cutter is picked up and placed on the head spot by spot (it doesn't roll). See docs/cutter-tracking.md.
 
 States
   NOT_HOMED -> HOMING -> IDLE (guard homed, sensors not calibrated)
@@ -8,11 +10,14 @@ States
   any -> STOPPED (app STOP, E-stop, board fault, lost connection) -> reset -> READY / IDLE
 
 Every loop while CUTTING:
-  1. read the orientation sensor -> where on the head the device is (yaw, pitch)
-  2. look up the hair length the chosen style wants there -> send that guard length to the board
-  3. allow the clipper ONLY if: trigger held, sensors OK, not near the face/ears, and the guard
-     is already at the right length for this spot ("wrong spot -> clipper off immediately")
-  4. while the rollers are rolling, mark the area under the clipper as cut -> coverage map for the app
+  1. force pads: is the cutter sitting flat on the head (both pads pressed)?
+  2. where is it: ArUco tags seen by the camera if visible now, otherwise the IMU (corrected by earlier tag
+     sightings) -> spot on the head (yaw, pitch)               [cutter_tracking.py]
+  3. look up the hair length the chosen style wants there -> send that guard length to the board
+     (when the cutter is lifted the guard keeps its length: the screw drive is slow, ~5 mm/s)
+  4. allow the clipper ONLY if: trigger held, sensors OK, cutter seated, tags and IMU agree, not near the
+     face/ears, and the guard is already at the right length for this spot
+  5. while the clipper runs on a seated cutter, mark the area under it as cut -> coverage map for the app
 """
 import collections
 import math
@@ -24,6 +29,7 @@ import numpy as np
 
 import config
 import orientation
+from cutter_tracking import CutterFusion
 from orientation import SurfaceLocator, calibrate, direction, in_cut_zone, max_pitch, measured_vector
 from styles import STYLES, guard_length, region_name, validate_lengths
 
@@ -34,8 +40,10 @@ GRID_PITCH = list(range(0, 111, 5))
 HINTS = {
     "trigger": "Hold the trigger to cut.",
     "zone": "Too close to the face or ears. Trim there by hand.",
-    "guard": "Slow down: the guard is adjusting.",
-    "sensors": "Can't tell where the device is. Check the orientation sensor.",
+    "guard": "Hold still: the guard is adjusting to this spot.",
+    "contact": "Place the cutter flat on your head so both pads touch.",
+    "unsure": "Hold still: the camera and the cutter's sensor disagree about where it is.",
+    "sensors": "Can't tell where the cutter is. Check the orientation sensor.",
     "estop": "E-stop is pressed.",
     "camera": "Face the camera so it can see where your head is.",
 }
@@ -52,6 +60,13 @@ class Controller:
         orientation.reset_zones()
         self.profile = profile              # head shape: average, measured, or a 3D scan (vision/head_profile.py)
         self.locator = SurfaceLocator(profile)
+        self.fusion = CutterFusion(self.locator)   # IMU + ArUco tag sightings
+        self.ts = float(getattr(link, "speedup", 1.0)) if sim else 1.0   # simulation runs the fake user faster
+        self.loc_source = None              # "tags" | "imu" | None
+        self._last_sight_t = 0.0
+        self._pads = [False, False]         # each force pad pressed (with hysteresis)
+        self.seated = False                 # both pads pressed
+        self._seated_since = None
         self.camera = camera                # CameraHead / SimCameraHead, or None
         self.R_cam0 = None                  # head -> camera rotation at calibration
         self._M_eff = None
@@ -71,10 +86,8 @@ class Controller:
         self.loc = None                     # (yaw, pitch) or None
         self.target = config.GUARD_MAX
         self.block = None                   # why the clipper is not allowed right now
-        self.rolling = False
-        self.speed = 0.0                    # roller speed, mm/s (smoothed)
-        self.cut_distance = 0.0             # mm rolled with the clipper on, this session
-        self._last_rolled = None
+        self.placements = 0                 # times the cutter was put down on the head this session
+        self.cut_time = 0.0                 # seconds the clipper ran this session
         self.started_at = None
         self.finished_at = None
         self.events = collections.deque(maxlen=60)
@@ -153,6 +166,8 @@ class Controller:
             raise ControllerError("The orientation sensor must be working to calibrate.")
         if len(self.recent_v) < 5:
             raise ControllerError("No sensor readings yet. Wait a second and try again.")
+        if not self.seated:
+            raise ControllerError("Press the cutter flat on that spot so both pads touch, then Record.")
         R_cam = None
         if self.camera is not None:
             R_cam, age = self.camera.pose()
@@ -181,6 +196,7 @@ class Controller:
             raise ControllerError(f"Spots disagree by {err:.0f} degrees. Re-record them, holding the clipper "
                                   "straight at the head and keeping the head still.")
         self.M, self.calib_err, self.R_cam0 = M, err, R0
+        self.fusion.reset()
         self.state = "READY"
         self.message = f"Calibrated (accuracy about {err:.0f}°). Choose a haircut."
         self._log(f"Calibrated, worst spot off by {err:.1f}°", "ok")
@@ -193,6 +209,7 @@ class Controller:
         self._require("IDLE", "READY", "DONE", "CALIBRATING")
         self.M, self.calib_err = self.link.world_to_head(), 0.0
         self.R_cam0 = self.camera.pose()[0] if self.camera is not None else None
+        self.fusion.reset()
         self.state, self.message = "READY", "Calibrated (simulation). Choose a haircut."
         self._log("Simulated calibration loaded")
 
@@ -219,6 +236,12 @@ class Controller:
             self._camera_lost_since = getattr(self, "_camera_lost_since", None) or now
         return self._M_eff if self._M_eff is not None else self.M
 
+    # ------------------------------------------------------------ tag sightings from outside (iPhone app)
+    def add_sighting(self, point, axis, age=0.0, source="iphone", n_tags=1):
+        """Where a camera saw the cutter: scalp-face center (mm) and into-scalp direction, in HairBarbot head
+        axes (x nose, y client's left, z up, origin head center). age = seconds since the picture."""
+        return self.fusion.add_sighting(point, axis, time.time() - max(0.0, float(age)), source, n_tags)
+
     # ------------------------------------------------------------ session
     def start(self, lengths, fade_to=None, style=None):
         self._require("READY", "DONE")
@@ -226,9 +249,8 @@ class Controller:
         self.fade_to = None if fade_to in (None, "", False) else float(fade_to)
         self.style_key = style if style in STYLES else None
         self._dwell[:] = 0.0
-        self.cut_distance = 0.0
-        self.link.zero_rolled()
-        self._last_rolled = None
+        self.placements = 0
+        self.cut_time = 0.0
         self.started_at, self.finished_at = time.time(), None
         self.link.vacuum(True)
         self.state = "CUTTING"
@@ -288,33 +310,50 @@ class Controller:
             except Exception:
                 traceback.print_exc()
 
+    def _update_pads(self, fsr, now):
+        for k in range(2):
+            v = fsr[k]
+            if self._pads[k] and v < config.FSR_OFF:
+                self._pads[k] = False
+            elif not self._pads[k] and v > config.FSR_ON:
+                self._pads[k] = True
+        seated = all(self._pads)
+        if seated and not self.seated:
+            self._seated_since = now
+            if self.state == "CUTTING":
+                self.placements += 1
+        if not seated:
+            self._seated_since = None
+        self.seated = seated
+
     def _tick(self, now, dt):
         st = self.link.get_status()
         imu_ok = st["imu_ok"]
         if imu_ok:
             self.recent_v.append(measured_vector(st["q"]))
+        self._update_pads(st["fsr"], now)
+        settled = self.seated and (now - self._seated_since) * self.ts >= config.CONTACT_SETTLE_S
+        # camera sightings of the cutter's tags
+        if self.camera is not None and hasattr(self.camera, "sighting"):
+            sg = self.camera.sighting()
+            if sg is not None and sg[0] > self._last_sight_t:
+                self._last_sight_t = sg[0]
+                self.fusion.add_sighting(sg[1], sg[2], sg[0], "camera", sg[3])
         M = self._room_to_head(now)
-        self.loc = (tuple(float(x) for x in self.locator.spot(M @ measured_vector(st["q"])))
-                    if (imu_ok and M is not None) else None)
+        n_imu = M @ measured_vector(st["q"]) if (imu_ok and M is not None) else None
+        up = M @ np.array([0.0, 0.0, 1.0]) if M is not None else None      # room vertical, head axes
+        loc, self.loc_source, disagree = self.fusion.locate(n_imu, self.seated, now, up)
+        self.loc = loc
         camera_lost = (self.camera is not None and self.R_cam0 is not None
                        and getattr(self, "_camera_lost_since", None) is not None
                        and now - self._camera_lost_since > self.CAMERA_LOST_S)
-        # roller: speed and "is it rolling on the head?"
-        if st["enc_ok"] and dt > 0:
-            if self._last_rolled is not None:
-                d = st["rolled"] - self._last_rolled
-                if abs(d) < 200:                       # ignore a jump (e.g. after Z)
-                    self.speed = 0.8 * self.speed + 0.2 * (d / dt)
-                    if st["clipper"]:
-                        self.cut_distance += abs(d)
-            self._last_rolled = st["rolled"]
-        self.rolling = st["enc_ok"] and abs(self.speed) > config.ROLLING_MIN_SPEED
 
         cutting = self.state == "CUTTING"
-        if cutting and self.loc:
+        if cutting and self.loc and self.seated:
             self.target = guard_length(self.loc[0], self.loc[1], self.lengths, self.fade_to)
-        else:
+        elif not cutting:
             self.target = config.GUARD_MAX         # idle: longest guard = safest
+        # (cutting but lifted: keep the last length; the next spot is usually next to this one)
         if st["homed"] and self.state != "STOPPED":
             self.link.guard(self.target)
 
@@ -325,8 +364,12 @@ class Controller:
                 self.block = "estop"
             elif not self.loc:
                 self.block = "sensors"
-            elif camera_lost:
+            elif not settled:
+                self.block = "contact"
+            elif camera_lost and self.loc_source != "tags":
                 self.block = "camera"
+            elif disagree is not None and disagree > config.LOC_DISAGREE_DEG and self.fusion.trusted():
+                self.block = "unsure"
             elif not in_cut_zone(*self.loc):
                 self.block = "zone"
             elif abs(st["guard"] - self.target) > config.GUARD_TOL:
@@ -358,10 +401,11 @@ class Controller:
                 self._last_zone_log = now
             if st["clipper"] and self.loc:
                 self.message = f"Cutting the {region_name(*self.loc)} at {st['guard']:.0f} mm."
-                if self.rolling or not st["enc_ok"]:
+                if self.seated:
+                    self.cut_time += dt * self.ts
                     n = direction(*self.loc)
                     near = self._cell_dir @ n > math.cos(math.radians(config.COVER_RADIUS_DEG))
-                    self._dwell[near] += dt
+                    self._dwell[near] += dt * self.ts
             else:
                 self.message = HINTS.get(self.block, "Hold the trigger to cut.")
             if self.coverage_pct() >= config.COVER_DONE:
@@ -400,10 +444,17 @@ class Controller:
     def status(self):
         st = self.link.get_status()
         loc = self.loc
+        now = time.time()
+        tags = self.fusion.info(now)
+        hint = HINTS.get(self.block)
+        if (self.state == "CUTTING" and self.block is None and self.camera is not None
+                and tags["last_seen_s"] is not None and tags["last_seen_s"] > config.IMU_ONLY_WARN_S):
+            hint = "Tip: let the camera see the cutter now and then, so it stays accurate."
         live = {"need_guard": round(self.target, 1) if self.state == "CUTTING" and loc else None,
-                "guard_err": round(st["guard"] - self.target, 2), "block": self.block,
-                "hint": HINTS.get(self.block), "rolling": self.rolling, "speed": round(self.speed, 1),
-                "cut_distance": round(self.cut_distance), "elapsed": None}
+                "guard_err": round(st["guard"] - self.target, 2), "block": self.block, "hint": hint,
+                "seated": self.seated, "pads": list(self._pads), "fsr": list(st["fsr"]), "fsr_on": config.FSR_ON,
+                "placements": self.placements, "cut_time": round(self.cut_time, 1),
+                "source": self.loc_source, "tags": tags, "elapsed": None}
         if self.started_at:
             live["elapsed"] = round((self.finished_at or time.time()) - self.started_at, 1)
         return {

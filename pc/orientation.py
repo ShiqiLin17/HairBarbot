@@ -81,6 +81,35 @@ def locate(q_device, M, q_head=None):
     return yaw_pitch(M @ measured_vector(q_device, q_head))
 
 
+def rot_from_to(a, b):
+    """Rotation matrix turning direction a onto direction b (shortest turn)."""
+    a = np.asarray(a, float) / (np.linalg.norm(a) or 1.0)
+    b = np.asarray(b, float) / (np.linalg.norm(b) or 1.0)
+    v = np.cross(a, b)
+    c = float(a @ b)
+    if c < -0.999999:
+        axis = np.cross(a, [1.0, 0.0, 0.0])
+        if np.linalg.norm(axis) < 1e-6:
+            axis = np.cross(a, [0.0, 1.0, 0.0])
+        axis /= np.linalg.norm(axis)
+        return 2 * np.outer(axis, axis) - np.eye(3)
+    vx = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+    return np.eye(3) + vx + vx @ vx / (1 + c)
+
+
+def axis_angle(axis, deg):
+    axis = np.asarray(axis, float) / (np.linalg.norm(axis) or 1.0)
+    t = math.radians(deg)
+    K = np.array([[0, -axis[2], axis[1]], [axis[2], 0, -axis[0]], [-axis[1], axis[0], 0]])
+    return np.eye(3) + math.sin(t) * K + (1 - math.cos(t)) * K @ K
+
+
+def angle_between(a, b):
+    a = np.asarray(a, float) / (np.linalg.norm(a) or 1.0)
+    b = np.asarray(b, float) / (np.linalg.norm(b) or 1.0)
+    return math.degrees(math.acos(max(-1.0, min(1.0, float(a @ b)))))
+
+
 def calibrate(pairs):
     """pairs: list of (v_measured, n_head_known). Returns (M, worst_error_deg).
     Kabsch: rotation M minimizing sum |M v - n|^2."""
@@ -133,18 +162,24 @@ class SurfaceLocator:
     (longer than it is wide, flatter on the sides) they differ by up to ~10-15 deg, so with a head profile
     (average size, measured, or a 3D scan) we look up the spot whose normal matches."""
 
+    DEFAULT_RADIUS = 95.0
+
     def __init__(self, profile=None, step=2.0):
         self.profile = profile
-        if profile is None:
-            return
-        spots, normals = [], []
+        spots, normals, points = [], [], []
         for p in np.arange(0.0, 125.0 + 1e-9, step):
             for y in np.arange(-180.0, 180.0, step if p > 0 else 360.0):
-                _, n = profile.surface(float(y), float(p))
+                if profile is None:                    # no head shape: a 95 mm ball
+                    n = direction(float(y), float(p))
+                    pt = n * self.DEFAULT_RADIUS
+                else:
+                    pt, n = profile.surface(float(y), float(p))
                 spots.append((float(y), float(p)))
                 normals.append(n)
+                points.append(pt)
         self.spots = np.array(spots)
         self.normals = np.array(normals)
+        self.points = np.array(points)
 
     def spot(self, n_head):
         """Outward surface direction in head axes -> (yaw, pitch) of the spot."""
@@ -163,6 +198,28 @@ class SurfaceLocator:
         yaw = (y0 + float(np.sum(w * dy) / np.sum(w)) + 180.0) % 360.0 - 180.0
         pitch = float(np.sum(w * self.spots[top, 1]) / np.sum(w))
         return yaw, pitch
+
+    def spot_from_point(self, p_head):
+        """A point in head axes (mm), e.g. where the camera saw the cutter touch -> ((yaw, pitch), distance
+        from that point to the nearest scalp point in mm). Used for the ArUco tag sightings."""
+        p = np.asarray(p_head, float)
+        d = np.linalg.norm(self.points - p, axis=1)
+        top = np.argpartition(d, 4)[:4]
+        w = 1.0 / (d[top] + 0.5) ** 2
+        best = top[np.argmin(d[top])]
+        y0 = self.spots[best, 0]
+        dy = (self.spots[top, 0] - y0 + 180.0) % 360.0 - 180.0
+        if self.spots[best, 1] < 4.0:
+            dy = dy * 0.0
+        yaw = (y0 + float(np.sum(w * dy) / np.sum(w)) + 180.0) % 360.0 - 180.0
+        pitch = float(np.sum(w * self.spots[top, 1]) / np.sum(w))
+        return (yaw, pitch), float(d[best])
+
+    def point(self, yaw, pitch):
+        """Scalp point (mm, head axes) at (yaw, pitch)."""
+        if self.profile is None:
+            return direction(yaw, pitch) * self.DEFAULT_RADIUS
+        return self.profile.surface(yaw, pitch)[0]
 
     def normal(self, yaw, pitch):
         """Direction the device points when held flat at (yaw, pitch) (for calibration targets)."""

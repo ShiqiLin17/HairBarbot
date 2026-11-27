@@ -93,6 +93,8 @@ const COMMANDS = {
   simTrigger: "/api/sim/trigger",
   simFace: "/api/sim/face",
   simTurnHead: "/api/sim/turn_head",
+  simLift: "/api/sim/lift",
+  simHideTags: "/api/sim/hide_tags",
 };
 
 let latest = null;      // last controller status

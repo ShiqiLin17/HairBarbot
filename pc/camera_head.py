@@ -10,6 +10,10 @@ placement cancels out, so it only has to stay still (on the table, facing the us
 
 It also measures the top of the forehead (the top of the face mesh), which the controller uses as this
 person's front no-cut line instead of the average.
+
+And it looks for the ArUco tags on the cutter (vision/cutter_tags.py) in the same picture. With the head pose
+from the face, that gives where the cutter touches the head (a "sighting", in head axes), which the controller
+combines with the IMU (cutter_tracking.py).
 """
 import math
 import os
@@ -41,6 +45,13 @@ class CameraHead:
         self._forehead = []
         self._jpeg = None
         self.tracker = self.est.tracker
+        self.tags = None
+        try:
+            from cutter_tags import CutterTags
+            self.tags = CutterTags()
+        except Exception as e:          # old OpenCV without aruco: head tracking still works
+            print(f"[camera] cutter tags disabled: {e}")
+        self._sighting = None           # (t, point, axis, n_tags)
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _loop(self):
@@ -52,6 +63,16 @@ class CameraHead:
                 continue
             e = self.est.estimate(frame, self.style)
             fresh = e.found and not e.holding
+            K = self.est.camera_matrix(frame.shape[1], frame.shape[0])
+            found, cpose = {}, None
+            if self.tags is not None:
+                from cutter_tags import cutter_in_head
+                found = self.tags.detect(frame)
+                cpose = self.tags.pose(found, K)
+                if cpose is not None and fresh:
+                    p, a = cutter_in_head(cpose[0], cpose[1], cv2.Rodrigues(e.rvec)[0], e.tvec)
+                    with self.lock:
+                        self._sighting = (time.time(), p, a, cpose[2])
             with self.lock:
                 if fresh:
                     self.R = cv2.Rodrigues(e.rvec)[0]
@@ -62,7 +83,10 @@ class CameraHead:
                         self._forehead.append(math.degrees(math.acos(max(-1, min(1, p[2] / np.linalg.norm(p))))))
                         self._forehead = self._forehead[-60:]
                 self.found = fresh
-            out = self._draw(frame, e, self.est.camera_matrix(frame.shape[1], frame.shape[0]), self.style,
+            if found:
+                from cutter_tags import draw as draw_tags
+                draw_tags(frame, found, cpose, K)
+            out = self._draw(frame, e, K, self.style,
                              mirror=True, profile=self.est.profile, mesh_edges=self.est.mesh_edges,
                              tracker=self.tracker)
             ok, buf = cv2.imencode(".jpg", cv2.resize(out, (480, int(480 * out.shape[0] / out.shape[1]))),
@@ -80,9 +104,14 @@ class CameraHead:
         with self.lock:
             return float(np.median(self._forehead)) if len(self._forehead) >= 10 else None
 
+    def sighting(self):
+        """Latest cutter sighting: (time, scalp-face point mm, into-scalp axis, tags seen), head axes; or None."""
+        with self.lock:
+            return self._sighting
+
     def info(self):
         R, age = self.pose()
-        return {"enabled": True, "simulated": False, "found": bool(age < 0.3),
+        return {"enabled": True, "simulated": False, "found": bool(age < 0.3), "tags": self.tags is not None,
                 "yaw": None if self.yaw is None else float(self.yaw),
                 "tracker": self.tracker, "forehead_pitch": self.forehead_pitch()}
 
@@ -92,11 +121,17 @@ class CameraHead:
 
 
 class SimCameraHead:
-    """Simulated camera: reads the simulated user's real head rotation from SimLink."""
-    def __init__(self, link):
+    """Simulated camera: reads the simulated user's real head rotation from SimLink, and "sees" the cutter's
+    tags whenever the cutter is on the side of the head facing the camera (not the back)."""
+    TAG_NOISE_MM = 1.5
+
+    def __init__(self, link, tags=True):
         self.link = link
         self.tracker = "simulated"
         self.hidden = False             # test hook: the face is out of view
+        self.tags = tags                # simulate the cutter's tags
+        self.tags_hidden = False        # test hook: a hand covers the tags
+        self._rng = np.random.default_rng(3)
 
     def pose(self):
         if self.hidden:
@@ -106,8 +141,23 @@ class SimCameraHead:
     def forehead_pitch(self):
         return None
 
+    def sighting(self):
+        if not self.tags or self.tags_hidden or self.hidden:
+            return None
+        s = self.link.sim_cutter_truth()            # (point, axis) in head axes
+        if s is None:
+            return None
+        point, axis = s
+        # the camera sits in front of the face: it sees the tags when the cutter's spot faces it
+        to_cam = self.link.head_to_camera().T @ np.array([0.0, 0.0, -1.0])     # head axes, toward the camera
+        if float(-axis @ to_cam) < -0.25:            # spot faces away (back of the head)
+            return None
+        noise = self._rng.normal(0, self.TAG_NOISE_MM, 3)
+        return (time.time(), point + noise, axis, 2)
+
     def info(self):
-        return {"enabled": True, "simulated": True, "found": not self.hidden, "yaw": float(self.link.head_yaw),
+        return {"enabled": True, "simulated": True, "found": not self.hidden, "tags": self.tags,
+                "yaw": float(self.link.head_yaw),
                 "tracker": self.tracker, "forehead_pitch": None}
 
     def jpeg(self):
